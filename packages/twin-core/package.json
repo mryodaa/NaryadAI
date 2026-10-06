@@ -1,0 +1,19 @@
+{
+  "name": "@allur/twin-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@allur/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "eventId": "erp:plan:2026-10",
+  "source": "erp",
+  "ts": "2026-10-01T07:30:00+05:00",
+  "area": "finished",
+  "type": "plan_set",
+  "payload": {
+    "month": "2026-10",
+    "target": 5500,
+    "models": [
+      { "model": "onix", "qty": 2500 },
+      { "model": "cobalt", "qty": 1800 },
+      { "model": "j7", "qty": 500 }
+    ]
+  }
+}

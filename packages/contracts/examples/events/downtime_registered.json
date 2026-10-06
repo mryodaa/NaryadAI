@@ -1,0 +1,14 @@
+{
+  "eventId": "mes-dt-20261007-0012",
+  "source": "mes",
+  "ts": "2026-10-07T10:21:00+05:00",
+  "area": "assembly",
+  "equipmentId": "CONV-03",
+  "type": "downtime_registered",
+  "payload": {
+    "reason": "Обрыв цепи",
+    "category": "breakdown",
+    "from": "2026-10-07T10:05:00+05:00",
+    "registeredBy": "Мастер сборки"
+  }
+}

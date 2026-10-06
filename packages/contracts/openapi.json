@@ -1,0 +1,2404 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Цифровой двойник цеха — точка входа",
+    "version": "1.0.0",
+    "description": "Единая документированная точка входа двойника. По этим адресам ходят имитаторы 1С в прототипе и пойдут настоящие системы завода.\n\n- Все события проверяются схемой; ошибки сохраняются и видны на экране «Источники данных».\n- Повтор события с тем же `eventId` не создаёт дубль (идемпотентность).\n- Время — ISO 8601 с часовым поясом, завод работает по UTC+5.\n- Контроллеры и видеоаналитика подключаются по MQTT, см. «Документация MQTT (AsyncAPI)».\n\nТипичная интеграция с 1С:MES/QLS/WMS — HTTP-сервисы или OData; конкретная выгрузка настраивается со специалистами завода."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Шлюз двойника"
+    }
+  ],
+  "tags": [
+    {
+      "name": "1С и мастер",
+      "description": "Приём данных из 1С:MES, QLS, WMS, ERP и с телефона мастера"
+    },
+    {
+      "name": "Импорт",
+      "description": "Загрузка выданных таблиц с проверкой противоречий"
+    },
+    {
+      "name": "Двойник",
+      "description": "Чтение состояния, прогнозов, инцидентов и принятие решений"
+    },
+    {
+      "name": "Демо",
+      "description": "Управление демонстрацией. В реальном внедрении не используется"
+    }
+  ],
+  "paths": {
+    "/api/v1/events": {
+      "post": {
+        "tags": [
+          "1С и мастер"
+        ],
+        "summary": "Пакет событий из 1С:MES / QLS / WMS",
+        "description": "Массив канонических событий. Каждое проверяется отдельно: корректные принимаются, ошибочные возвращаются с причиной.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventBatch"
+              },
+              "examples": {
+                "Проход поста и несоответствие": {
+                  "value": [
+                    {
+                      "eventId": "mes-20261007-0001240",
+                      "source": "mes",
+                      "ts": "2026-10-07T13:40:00+05:00",
+                      "area": "weld",
+                      "equipmentId": "ABB-04",
+                      "vin": "KZACB2S5XTK004828",
+                      "type": "post_passed",
+                      "payload": {
+                        "model": "cobalt",
+                        "post": "WELD-4"
+                      }
+                    },
+                    {
+                      "eventId": "qls-20261007-000078",
+                      "source": "qls",
+                      "ts": "2026-10-07T13:40:30+05:00",
+                      "area": "paint",
+                      "vin": "KZACN1S13TK004815",
+                      "type": "nonconformity",
+                      "payload": {
+                        "checkpoint": "CP-PAINT",
+                        "defect": "paint_dirt",
+                        "decision": "repaint"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог приёма",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plan": {
+      "post": {
+        "tags": [
+          "1С и мастер"
+        ],
+        "summary": "План на месяц по моделям (1С:ERP)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              },
+              "examples": {
+                "План октября": {
+                  "value": {
+                    "month": "2026-10",
+                    "target": 5500,
+                    "models": [
+                      {
+                        "model": "onix",
+                        "qty": 2500
+                      },
+                      {
+                        "model": "cobalt",
+                        "qty": 1800
+                      },
+                      {
+                        "model": "j7",
+                        "qty": 500
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог приёма",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shift-reports": {
+      "post": {
+        "tags": [
+          "1С и мастер"
+        ],
+        "summary": "Сменный отчёт в формате выданной таблицы",
+        "description": "Дата, Линия, План, Факт, Время работы (ч), Загрузка (%). Дата — ДД.ММ.ГГГГ или ГГГГ-ММ-ДД.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShiftReportRequest"
+              },
+              "examples": {
+                "Данные организаторов": {
+                  "value": [
+                    {
+                      "date": "01.10.2026",
+                      "line": "Сварка-1",
+                      "plan": 120,
+                      "fact": 118,
+                      "hours": 7.8,
+                      "load": 98
+                    },
+                    {
+                      "date": "01.10.2026",
+                      "line": "Окраска-1",
+                      "plan": 120,
+                      "fact": 115,
+                      "hours": 7.5,
+                      "load": 94
+                    },
+                    {
+                      "date": "01.10.2026",
+                      "line": "Сборка-1",
+                      "plan": 120,
+                      "fact": 121,
+                      "hours": 8,
+                      "load": 100
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "line": "Сварка-1",
+                      "plan": 120,
+                      "fact": 111,
+                      "hours": 7.2,
+                      "load": 91
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "line": "Окраска-1",
+                      "plan": 120,
+                      "fact": 116,
+                      "hours": 7.7,
+                      "load": 96
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "line": "Сборка-1",
+                      "plan": 120,
+                      "fact": 119,
+                      "hours": 7.9,
+                      "load": 99
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог приёма и найденные противоречия",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/downtimes": {
+      "post": {
+        "tags": [
+          "1С и мастер"
+        ],
+        "summary": "Регистрация простоя (1С:MES или мастер)",
+        "description": "Если не указать from — простой начинается сейчас (по часам двойника). Событие сразу появляется на экране руководителя.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DowntimeRequest"
+              },
+              "examples": {
+                "Обрыв цепи на сборке": {
+                  "value": {
+                    "source": "master",
+                    "area": "assembly",
+                    "equipmentId": "CONV-03",
+                    "reason": "Обрыв цепи",
+                    "category": "breakdown",
+                    "registeredBy": "Мастер сборки"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог приёма",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/quality": {
+      "post": {
+        "tags": [
+          "1С и мастер"
+        ],
+        "summary": "Итог качества в формате выданной таблицы",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QualityRequest"
+              },
+              "examples": {
+                "Данные организаторов": {
+                  "value": [
+                    {
+                      "date": "01.10.2026",
+                      "area": "Сварка",
+                      "produced": 118,
+                      "defects": 2,
+                      "pct": 1.7
+                    },
+                    {
+                      "date": "01.10.2026",
+                      "area": "Окраска",
+                      "produced": 115,
+                      "defects": 4,
+                      "pct": 3.5
+                    },
+                    {
+                      "date": "01.10.2026",
+                      "area": "Сборка",
+                      "produced": 121,
+                      "defects": 1,
+                      "pct": 0.8
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "area": "Сварка",
+                      "produced": 111,
+                      "defects": 3,
+                      "pct": 2.7
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "area": "Окраска",
+                      "produced": 116,
+                      "defects": 6,
+                      "pct": 5.2
+                    },
+                    {
+                      "date": "02.10.2026",
+                      "area": "Сборка",
+                      "produced": 119,
+                      "defects": 2,
+                      "pct": 1.7
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог приёма и найденные противоречия",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/import/csv": {
+      "post": {
+        "tags": [
+          "Импорт"
+        ],
+        "summary": "Импорт выданной таблицы файлом CSV",
+        "description": "Тело — текст CSV (разделитель «;», «,» или табуляция; десятичная запятая допустима). Тип таблицы определяется по заголовкам: работа линий, простои, качество, план по моделям. В ответе — найденные противоречия.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": {
+              "schema": {
+                "type": "string"
+              },
+              "example": "Дата;Линия;План;Факт;Время работы, ч;Загрузка, %\n01.10.2026;Сварка-1;120;118;7,8;98"
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог импорта и найденные противоречия",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/state": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Текущий снимок двойника",
+        "responses": {
+          "200": {
+            "description": "Снимок: показатели, участки, буферы, инциденты",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/incidents": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Инциденты с объяснением и вариантами решений",
+        "responses": {
+          "200": {
+            "description": "Список инцидентов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Прогноз плана месяца (коридор P10/P50/P90) и разложение потерь",
+        "responses": {
+          "200": {
+            "description": "Прогноз",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vin/{vin}": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Паспорт автомобиля: маршрут по постам и условия в момент прохода",
+        "parameters": [
+          {
+            "name": "vin",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Vin"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Паспорт",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "VIN не найден"
+          }
+        }
+      }
+    },
+    "/api/v1/sources": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Состояние источников данных и ошибки валидации",
+        "responses": {
+          "200": {
+            "description": "Источники",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decisions": {
+      "post": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Принять вариант решения по инциденту",
+        "description": "Двойник выдаёт наряд в системы завода (MQTT allur/kst/twin/work-orders) и пересчитывает прогноз.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              },
+              "examples": {
+                "Заменить фильтр в пересменку": {
+                  "value": {
+                    "incidentId": "inc-quality-paint-0001",
+                    "optionId": "replace_at_shift_change",
+                    "decidedBy": "Начальник производства"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Решение принято, наряд выдан",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Инцидент или вариант не найден"
+          }
+        }
+      }
+    },
+    "/api/v1/demo": {
+      "get": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Состояние демонстрации: время, скорость, ступень, сценарий",
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/demo/clock": {
+      "post": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Скорость и пауза",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "speed": {
+                    "type": "number"
+                  },
+                  "paused": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/demo/reset": {
+      "post": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Сброс к началу сценария",
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/demo/scenario": {
+      "post": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Запустить сценарий",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scenario": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "scenario"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/demo/stage": {
+      "post": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Ступень внедрения 0/1/2",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stage": {
+                    "$ref": "#/components/schemas/Stage"
+                  }
+                },
+                "required": [
+                  "stage"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Vin": {
+        "type": "string",
+        "pattern": "^[A-HJ-NPR-Z0-9]{17}$",
+        "description": "VIN кузова, 17 символов",
+        "examples": [
+          "KZACN1S18TK004812"
+        ]
+      },
+      "AreaId": {
+        "type": "string",
+        "enum": [
+          "warehouse",
+          "weld",
+          "paint",
+          "assembly",
+          "qc",
+          "finished"
+        ],
+        "description": "Участок: warehouse — склад комплектующих, weld — сварка, paint — окраска, assembly — сборка, qc — контроль качества (ОТК), finished — склад готовой продукции"
+      },
+      "ModelId": {
+        "type": "string",
+        "enum": [
+          "onix",
+          "cobalt",
+          "j7"
+        ],
+        "description": "Модель: onix — Chevrolet Onix, cobalt — Chevrolet Cobalt, j7 — JAC J7"
+      },
+      "SourceId": {
+        "type": "string",
+        "enum": [
+          "mes",
+          "qls",
+          "wms",
+          "erp",
+          "plc",
+          "camera",
+          "master",
+          "import"
+        ],
+        "description": "Система-источник: mes, qls, wms, erp — 1С; plc — контроллеры; camera — видеоаналитика; master — мобильный ввод мастера; import — загрузка файла"
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Время в ISO 8601 с часовым поясом",
+        "examples": [
+          "2026-10-07T13:40:00+05:00"
+        ]
+      },
+      "EventId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Уникальный идентификатор события в системе-источнике. Повтор с тем же eventId не создаёт дубль.",
+        "examples": [
+          "mes-20261007-000123"
+        ]
+      },
+      "EquipmentId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "Код оборудования из справочника: ABB-01…ABB-04, PRETREAT, BOOTH-01, BOOTH-02, OVEN, CONV-03, QC-LINE, QC-TRACK, QC-RAIN"
+      },
+      "PostPassedEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "post_passed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "$ref": "#/components/schemas/ModelId"
+              },
+              "post": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Код поста из справочника (WELD-1, PAINT-B2, ASM-3, QC-1, FG-IN…)"
+              }
+            },
+            "required": [
+              "model",
+              "post"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "vin",
+          "type",
+          "payload"
+        ],
+        "description": "Кузов прошёл пост (1С:MES)"
+      },
+      "NonconformityDecision": {
+        "type": "string",
+        "enum": [
+          "rework",
+          "repaint",
+          "scrap"
+        ],
+        "description": "rework — доработка на месте, repaint — повторная окраска, scrap — списание"
+      },
+      "NonconformityEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "nonconformity"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "checkpoint": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Контрольная точка: CP-WELD, CP-PAINT, CP-FINAL, CP-TRACK, CP-RAIN"
+              },
+              "defect": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Код дефекта из справочника (paint_dirt, weld_geometry…)"
+              },
+              "decision": {
+                "$ref": "#/components/schemas/NonconformityDecision"
+              },
+              "responsibleArea": {
+                "description": "Участок-виновник, если отличается от места обнаружения",
+                "$ref": "#/components/schemas/AreaId"
+              },
+              "count": {
+                "description": "Сколько кузовов (для ввода мастера без VIN)",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "comment": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "checkpoint",
+              "defect",
+              "decision"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Несоответствие на контрольной точке (1С:QLS; мастер — без VIN)"
+      },
+      "DowntimeCategory": {
+        "type": "string",
+        "enum": [
+          "breakdown",
+          "no_parts",
+          "setup",
+          "waiting",
+          "planned",
+          "quality",
+          "other"
+        ],
+        "description": "breakdown — поломка, no_parts — нет деталей, setup — наладка, waiting — ждём решения, planned — плановое ТО, quality — по качеству, other — другое"
+      },
+      "DowntimeRegisteredEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "downtime_registered"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "category": {
+                "$ref": "#/components/schemas/DowntimeCategory"
+              },
+              "from": {
+                "description": "Начало простоя",
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "to": {
+                "description": "Окончание; нет — простой продолжается",
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "registeredBy": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": [
+              "reason",
+              "category",
+              "from",
+              "registeredBy"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "equipmentId",
+          "type",
+          "payload"
+        ],
+        "description": "Простой зарегистрирован в 1С:MES или мастером. ts — время записи, from — начало простоя"
+      },
+      "EquipmentStatus": {
+        "type": "string",
+        "enum": [
+          "run",
+          "idle",
+          "fault",
+          "maintenance"
+        ],
+        "description": "run — работает, idle — ожидает, fault — авария, maintenance — обслуживание"
+      },
+      "EquipmentStateEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "equipment_state"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "$ref": "#/components/schemas/EquipmentStatus"
+              },
+              "code": {
+                "description": "Код аварии контроллера",
+                "type": "string",
+                "maxLength": 32
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "equipmentId",
+          "type",
+          "payload"
+        ],
+        "description": "Состояние оборудования с контроллера"
+      },
+      "EquipmentCounterEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "equipment_counter"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "cycles": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Циклов с последнего ТО"
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Циклов за весь срок службы"
+              }
+            },
+            "required": [
+              "cycles",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "equipmentId",
+          "type",
+          "payload"
+        ],
+        "description": "Счётчик циклов оборудования с контроллера"
+      },
+      "MetricId": {
+        "type": "string",
+        "enum": [
+          "filter_dp_pa",
+          "motor_current_a",
+          "vibration_mm_s"
+        ],
+        "description": "filter_dp_pa — перепад давления на фильтре, Па; motor_current_a — ток привода, А; vibration_mm_s — вибрация, мм/с"
+      },
+      "TelemetryEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "telemetry"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "metric": {
+                "$ref": "#/components/schemas/MetricId"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "metric",
+              "value"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "equipmentId",
+          "type",
+          "payload"
+        ],
+        "description": "Значение датчика"
+      },
+      "CameraDetectionKind": {
+        "type": "string",
+        "enum": [
+          "line_stopped",
+          "queue",
+          "post_empty"
+        ],
+        "description": "line_stopped — линия стоит, queue — очередь (value = число кузовов), post_empty — пост без оператора"
+      },
+      "CameraDetectionEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "camera_detection"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "cameraId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "kind": {
+                "$ref": "#/components/schemas/CameraDetectionKind"
+              },
+              "value": {
+                "type": "number"
+              },
+              "clipUrl": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "cameraId",
+              "kind"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Детекция видеоаналитики"
+      },
+      "StockLevelEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "stock_level"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "kitId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "model": {
+                "$ref": "#/components/schemas/ModelId"
+              },
+              "qty": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "shiftsLeft": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "kitId",
+              "model",
+              "qty",
+              "shiftsLeft"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Остаток комплектов на складе (1С:WMS)"
+      },
+      "PlanModelLine": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/ModelId"
+          },
+          "qty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "model",
+          "qty"
+        ]
+      },
+      "PlanSetEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "plan_set"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "month": {
+                "type": "string",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+              },
+              "target": {
+                "description": "Целевой план месяца, если отличается от суммы по моделям",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "models": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlanModelLine"
+                }
+              }
+            },
+            "required": [
+              "month",
+              "models"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "План производства на месяц (1С:ERP)"
+      },
+      "ShiftReportEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "shift_report"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "shift": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 2
+                  }
+                ]
+              },
+              "line": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "plan": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "fact": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "hours": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 24
+              },
+              "load": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 200
+              }
+            },
+            "required": [
+              "date",
+              "line",
+              "plan",
+              "fact",
+              "hours",
+              "load"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Сменный отчёт линии (1С:MES)"
+      },
+      "QualitySummaryEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "quality_summary"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "shift": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 2
+                  }
+                ]
+              },
+              "produced": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "defects": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "pct": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "date",
+              "produced",
+              "defects",
+              "pct"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Итог качества участка за смену или сутки (1С:QLS)"
+      },
+      "CanonicalEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PostPassedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/NonconformityEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DowntimeRegisteredEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EquipmentStateEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EquipmentCounterEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TelemetryEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CameraDetectionEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StockLevelEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PlanSetEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ShiftReportEvent"
+          },
+          {
+            "$ref": "#/components/schemas/QualitySummaryEvent"
+          }
+        ],
+        "description": "Каноническое событие двойника; поле type определяет состав payload"
+      },
+      "PlcStatePayload": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/EquipmentStatus"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "description": "Состояние оборудования"
+      },
+      "PlcCounterPayload": {
+        "type": "object",
+        "properties": {
+          "cycles": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "cycles",
+          "total"
+        ],
+        "description": "Счётчик циклов: с последнего ТО и за весь срок"
+      },
+      "PlcTelemetryPayload": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "$ref": "#/components/schemas/MetricId"
+          },
+          "value": {
+            "type": "number"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "metric",
+          "value"
+        ],
+        "description": "Значение датчика"
+      },
+      "CameraDetectionPayload": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CameraDetectionKind"
+          },
+          "value": {
+            "type": "number"
+          },
+          "clipUrl": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "description": "Детекция видеоаналитики"
+      },
+      "EventBatch": {
+        "minItems": 1,
+        "maxItems": 1000,
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/CanonicalEvent"
+        },
+        "description": "Пакет канонических событий. Каждое событие проверяется отдельно: корректные принимаются, ошибочные возвращаются с причиной."
+      },
+      "IngestRejected": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "index",
+          "issues"
+        ]
+      },
+      "IngestResult": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Принято новых событий"
+          },
+          "duplicates": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Повторы по eventId — пропущены"
+          },
+          "rejected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngestRejected"
+            }
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicates",
+          "rejected"
+        ],
+        "description": "Итог приёма"
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      "DowntimeRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "default": "mes",
+            "type": "string",
+            "enum": [
+              "mes",
+              "master"
+            ]
+          },
+          "ts": {
+            "description": "Время записи; нет — время двойника",
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "category": {
+            "$ref": "#/components/schemas/DowntimeCategory"
+          },
+          "from": {
+            "description": "Начало простоя; нет — сейчас",
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "registeredBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "area",
+          "equipmentId",
+          "reason",
+          "category",
+          "registeredBy"
+        ],
+        "description": "Регистрация простоя из 1С:MES или с телефона мастера"
+      },
+      "PlanRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "month": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+          },
+          "target": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "models": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanModelLine"
+            }
+          }
+        },
+        "required": [
+          "month",
+          "models"
+        ],
+        "description": "План на месяц по моделям (1С:ERP)"
+      },
+      "DateLike": {
+        "type": "string",
+        "pattern": "^(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\.\\d{1,2}\\.\\d{4})$"
+      },
+      "ShiftReportRow": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "$ref": "#/components/schemas/DateLike"
+          },
+          "shift": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 2
+              }
+            ]
+          },
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Линия, как в отчёте: «Сварка-1», «Окраска-1», «Сборка-1»"
+          },
+          "plan": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "fact": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "hours": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 24,
+            "description": "Время работы, ч"
+          },
+          "load": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 200,
+            "description": "Загрузка, %"
+          }
+        },
+        "required": [
+          "date",
+          "line",
+          "plan",
+          "fact",
+          "hours",
+          "load"
+        ],
+        "description": "Строка сменного отчёта в формате выданной таблицы"
+      },
+      "ShiftReportRequest": {
+        "minItems": 1,
+        "maxItems": 5000,
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/ShiftReportRow"
+        }
+      },
+      "QualityRow": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "$ref": "#/components/schemas/DateLike"
+          },
+          "shift": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 2
+              }
+            ]
+          },
+          "area": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Участок: «Сварка», «Окраска», «Сборка» или код (weld…)"
+          },
+          "produced": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "defects": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "pct": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "date",
+          "area",
+          "produced",
+          "defects"
+        ],
+        "description": "Строка итога качества в формате выданной таблицы"
+      },
+      "QualityRequest": {
+        "minItems": 1,
+        "maxItems": 5000,
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/QualityRow"
+        }
+      },
+      "DecisionRequest": {
+        "type": "object",
+        "properties": {
+          "incidentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "optionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "decidedBy": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "incidentId",
+          "optionId"
+        ],
+        "description": "Принятие варианта решения по инциденту"
+      },
+      "Stage": {
+        "anyOf": [
+          {
+            "type": "number",
+            "const": 0
+          },
+          {
+            "type": "number",
+            "const": 1
+          },
+          {
+            "type": "number",
+            "const": 2
+          }
+        ],
+        "description": "Ступень внедрения: 0 — только 1С, 1 — + контроллеры и камеры, 2 — + датчики на критичных узлах"
+      },
+      "DemoClock": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "simTime": {
+            "type": "number",
+            "description": "Время симуляции, мс от 1970-01-01 UTC"
+          },
+          "speed": {
+            "type": "number"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          },
+          "scenario": {
+            "type": "string",
+            "enum": [
+              "live_day",
+              "normal",
+              "paint_filter",
+              "chain_break",
+              "j7_kits",
+              "abb04_service"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "seed",
+          "simTime",
+          "speed",
+          "paused",
+          "stage",
+          "scenario"
+        ],
+        "description": "Часы демонстрации (только для имитаторов, не часть контракта интеграции)"
+      },
+      "WorkOrderAction": {
+        "type": "string",
+        "enum": [
+          "replace_filter",
+          "maintenance",
+          "repair",
+          "resequence",
+          "expedite_parts",
+          "inspect",
+          "none"
+        ]
+      },
+      "WorkOrder": {
+        "type": "object",
+        "properties": {
+          "workOrderId": {
+            "type": "string"
+          },
+          "incidentId": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/WorkOrderAction"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "scheduledAt": {
+            "description": "Когда выполнить",
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "durationMin": {
+            "type": "number",
+            "minimum": 0
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "issuedBy": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "required": [
+          "workOrderId",
+          "incidentId",
+          "action",
+          "area",
+          "title",
+          "scheduledAt",
+          "issuedAt"
+        ],
+        "description": "Наряд от двойника в системы завода (в реальном внедрении — 1С:ТОиР или MES)"
+      }
+    },
+    "examples": {
+      "camera_detection": {
+        "value": {
+          "eventId": "camera:CAM-ASM:line_stopped:2026-10-07T10:06:00+05:00",
+          "source": "camera",
+          "ts": "2026-10-07T10:06:00+05:00",
+          "area": "assembly",
+          "type": "camera_detection",
+          "payload": {
+            "cameraId": "CAM-ASM",
+            "kind": "line_stopped",
+            "clipUrl": "/media/clips/assembly-stop.mp4"
+          }
+        }
+      },
+      "downtime_registered": {
+        "value": {
+          "eventId": "mes-dt-20261007-0012",
+          "source": "mes",
+          "ts": "2026-10-07T10:21:00+05:00",
+          "area": "assembly",
+          "equipmentId": "CONV-03",
+          "type": "downtime_registered",
+          "payload": {
+            "reason": "Обрыв цепи",
+            "category": "breakdown",
+            "from": "2026-10-07T10:05:00+05:00",
+            "registeredBy": "Мастер сборки"
+          }
+        }
+      },
+      "equipment_counter": {
+        "value": {
+          "eventId": "plc:ABB-04:counter:2026-10-07T13:36:00+05:00",
+          "source": "plc",
+          "ts": "2026-10-07T13:36:00+05:00",
+          "area": "weld",
+          "equipmentId": "ABB-04",
+          "type": "equipment_counter",
+          "payload": {
+            "cycles": 5641,
+            "total": 48213
+          }
+        }
+      },
+      "equipment_state": {
+        "value": {
+          "eventId": "plc:CONV-03:state:2026-10-07T10:05:00+05:00",
+          "source": "plc",
+          "ts": "2026-10-07T10:05:00+05:00",
+          "area": "assembly",
+          "equipmentId": "CONV-03",
+          "type": "equipment_state",
+          "payload": {
+            "status": "fault",
+            "code": "E-2117",
+            "text": "Обрыв приводной цепи"
+          }
+        }
+      },
+      "nonconformity": {
+        "value": {
+          "eventId": "qls-20261007-000077",
+          "source": "qls",
+          "ts": "2026-10-07T13:41:00+05:00",
+          "area": "paint",
+          "vin": "KZACN1S13TK004815",
+          "type": "nonconformity",
+          "payload": {
+            "checkpoint": "CP-PAINT",
+            "defect": "paint_dirt",
+            "decision": "repaint"
+          }
+        }
+      },
+      "plan_set": {
+        "value": {
+          "eventId": "erp:plan:2026-10",
+          "source": "erp",
+          "ts": "2026-10-01T07:30:00+05:00",
+          "area": "finished",
+          "type": "plan_set",
+          "payload": {
+            "month": "2026-10",
+            "target": 5500,
+            "models": [
+              {
+                "model": "onix",
+                "qty": 2500
+              },
+              {
+                "model": "cobalt",
+                "qty": 1800
+              },
+              {
+                "model": "j7",
+                "qty": 500
+              }
+            ]
+          }
+        }
+      },
+      "post_passed": {
+        "value": {
+          "eventId": "mes-20261007-0001234",
+          "source": "mes",
+          "ts": "2026-10-07T13:36:00+05:00",
+          "area": "paint",
+          "equipmentId": "BOOTH-02",
+          "vin": "KZACN1S13TK004815",
+          "type": "post_passed",
+          "payload": {
+            "model": "onix",
+            "post": "PAINT-B2"
+          }
+        }
+      },
+      "quality_summary": {
+        "value": {
+          "eventId": "qls:quality:2026-10-02:0:paint",
+          "source": "qls",
+          "ts": "2026-10-02T16:10:00+05:00",
+          "area": "paint",
+          "type": "quality_summary",
+          "payload": {
+            "date": "2026-10-02",
+            "produced": 116,
+            "defects": 6,
+            "pct": 5.2
+          }
+        }
+      },
+      "shift_report": {
+        "value": {
+          "eventId": "mes:shift_report:2026-10-02:0:Окраска-1",
+          "source": "mes",
+          "ts": "2026-10-02T16:05:00+05:00",
+          "area": "paint",
+          "type": "shift_report",
+          "payload": {
+            "date": "2026-10-02",
+            "line": "Окраска-1",
+            "plan": 120,
+            "fact": 116,
+            "hours": 7.7,
+            "load": 96
+          }
+        }
+      },
+      "stock_level": {
+        "value": {
+          "eventId": "wms-stock-20261007-13-KIT-J7-HARNESS",
+          "source": "wms",
+          "ts": "2026-10-07T13:00:00+05:00",
+          "area": "warehouse",
+          "type": "stock_level",
+          "payload": {
+            "kitId": "KIT-J7-HARNESS",
+            "model": "j7",
+            "qty": 18,
+            "shiftsLeft": 1.5
+          }
+        }
+      },
+      "telemetry": {
+        "value": {
+          "eventId": "plc:BOOTH-02:filter_dp_pa:2026-10-07T13:36:00+05:00",
+          "source": "plc",
+          "ts": "2026-10-07T13:36:00+05:00",
+          "area": "paint",
+          "equipmentId": "BOOTH-02",
+          "type": "telemetry",
+          "payload": {
+            "metric": "filter_dp_pa",
+            "value": 312
+          }
+        }
+      }
+    }
+  }
+}

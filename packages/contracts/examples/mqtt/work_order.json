@@ -1,0 +1,15 @@
+{
+  "topic": "allur/kst/twin/work-orders",
+  "payload": {
+    "workOrderId": "wo-0001",
+    "incidentId": "inc-quality-paint-0001",
+    "action": "replace_filter",
+    "area": "paint",
+    "equipmentId": "BOOTH-02",
+    "title": "Заменить фильтр Камеры-02 в пересменку",
+    "scheduledAt": "2026-10-07T16:00:00+05:00",
+    "durationMin": 25,
+    "issuedAt": "2026-10-07T13:45:00+05:00",
+    "issuedBy": "Начальник производства"
+  }
+}

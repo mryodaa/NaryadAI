@@ -1,0 +1,8 @@
+{
+  "eventId": "camera:CAM-ASM:line_stopped:2026-10-07T10:06:00+05:00",
+  "source": "camera",
+  "ts": "2026-10-07T10:06:00+05:00",
+  "area": "assembly",
+  "type": "camera_detection",
+  "payload": { "cameraId": "CAM-ASM", "kind": "line_stopped", "clipUrl": "/media/clips/assembly-stop.mp4" }
+}

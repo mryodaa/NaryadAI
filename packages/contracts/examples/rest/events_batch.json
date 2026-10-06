@@ -1,0 +1,21 @@
+[
+  {
+    "eventId": "mes-20261007-0001240",
+    "source": "mes",
+    "ts": "2026-10-07T13:40:00+05:00",
+    "area": "weld",
+    "equipmentId": "ABB-04",
+    "vin": "KZACB2S5XTK004828",
+    "type": "post_passed",
+    "payload": { "model": "cobalt", "post": "WELD-4" }
+  },
+  {
+    "eventId": "qls-20261007-000078",
+    "source": "qls",
+    "ts": "2026-10-07T13:40:30+05:00",
+    "area": "paint",
+    "vin": "KZACN1S13TK004815",
+    "type": "nonconformity",
+    "payload": { "checkpoint": "CP-PAINT", "defect": "paint_dirt", "decision": "repaint" }
+  }
+]

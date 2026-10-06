@@ -1,0 +1,9 @@
+{
+  "eventId": "qls-20261007-000077",
+  "source": "qls",
+  "ts": "2026-10-07T13:41:00+05:00",
+  "area": "paint",
+  "vin": "KZACN1S13TK004815",
+  "type": "nonconformity",
+  "payload": { "checkpoint": "CP-PAINT", "defect": "paint_dirt", "decision": "repaint" }
+}

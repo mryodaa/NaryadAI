@@ -1,0 +1,168 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+  Цвет только для отклонений. Нормальное состояние — серое и белое.
+  Статусы: waiting (ждёт/заблокирован, серо-синий), attention (внимание/брак, янтарный),
+  fault (авария, красный), maintenance (обслуживание, фиолетовый).
+  Контраст текста проверен (AA): *-ink на белом и на своём *-bg ≥ 4.5:1.
+*/
+:root {
+  --page: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #f8f9fa;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+  --ink: #1b1f24;
+  --ink-2: #4b5563;
+  --ink-3: #636a75;
+
+  --accent: #2b5fd9;
+  --accent-ink: #1f4bb8;
+  --accent-bg: #eef3fd;
+
+  --st-neutral: #6b7280;
+  --st-neutral-ink: #374151;
+  --st-neutral-bg: #f3f4f6;
+  --st-waiting: #5b7a99;
+  --st-waiting-ink: #3d5a78;
+  --st-waiting-bg: #eef2f7;
+  --st-attention: #d97706;
+  --st-attention-ink: #8a4a00;
+  --st-attention-bg: #fff7e6;
+  --st-fault: #d0263f;
+  --st-fault-ink: #a8162d;
+  --st-fault-bg: #fdeef0;
+  --st-maintenance: #7c3aed;
+  --st-maintenance-ink: #6127c9;
+  --st-maintenance-bg: #f4f0fe;
+
+  --body-shell: #8a94a0;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05), 0 2px 8px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 12px 32px rgb(16 24 40 / 0.16), 0 2px 6px rgb(16 24 40 / 0.08);
+  color-scheme: light;
+}
+
+@theme inline {
+  --font-sans: 'Golos Text Variable', 'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-bg: var(--accent-bg);
+
+  --color-st-neutral: var(--st-neutral);
+  --color-st-neutral-ink: var(--st-neutral-ink);
+  --color-st-neutral-bg: var(--st-neutral-bg);
+  --color-st-waiting: var(--st-waiting);
+  --color-st-waiting-ink: var(--st-waiting-ink);
+  --color-st-waiting-bg: var(--st-waiting-bg);
+  --color-st-attention: var(--st-attention);
+  --color-st-attention-ink: var(--st-attention-ink);
+  --color-st-attention-bg: var(--st-attention-bg);
+  --color-st-fault: var(--st-fault);
+  --color-st-fault-ink: var(--st-fault-ink);
+  --color-st-fault-bg: var(--st-fault-bg);
+  --color-st-maintenance: var(--st-maintenance);
+  --color-st-maintenance-ink: var(--st-maintenance-ink);
+  --color-st-maintenance-bg: var(--st-maintenance-bg);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+}
+
+/* Интерфейс показывают на проекторе: база 16px на 1366, плавно до ~18.4px на 1920 */
+html {
+  font-size: clamp(16px, calc(16px + (100vw - 1366px) * 0.0043), 19px);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Живые числа меняются — моноширинные цифры, чтобы не прыгала вёрстка */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes body-in {
+  from {
+    opacity: 0;
+    transform: translateX(-0.4rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.body-in {
+  animation: body-in 600ms ease-out both;
+}
+
+@keyframes fresh-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgb(217 119 6 / 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0.5rem rgb(217 119 6 / 0);
+  }
+}
+
+.fresh {
+  animation: fresh-glow 1.6s ease-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.drawer-in {
+  animation: drawer-in 220ms ease-out both;
+}
+
+@keyframes modal-in {
+  from {
+    transform: translateY(0.75rem);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.modal-in {
+  animation: modal-in 200ms ease-out both;
+}

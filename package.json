@@ -1,22 +1,23 @@
 {
-  "name": "naryadai-demo",
+  "name": "allur-twin",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=22.13"
   },
-  "dependencies": {
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail -n gateway,web,sim -c blue,magenta,green \"pnpm --filter @allur/gateway dev\" \"pnpm --filter @allur/web dev\" \"pnpm --filter @allur/simulators dev\"",
+    "sim": "pnpm --filter @allur/simulators start",
+    "build": "pnpm -r run build",
+    "start": "pnpm --filter @allur/gateway start",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
+    "openapi": "pnpm --filter @allur/contracts openapi"
   },
   "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.2"
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.0",
+    "typescript": "^7.0.2"
   }
 }

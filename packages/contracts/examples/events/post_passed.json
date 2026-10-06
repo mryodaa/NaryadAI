@@ -1,0 +1,10 @@
+{
+  "eventId": "mes-20261007-0001234",
+  "source": "mes",
+  "ts": "2026-10-07T13:36:00+05:00",
+  "area": "paint",
+  "equipmentId": "BOOTH-02",
+  "vin": "KZACN1S13TK004815",
+  "type": "post_passed",
+  "payload": { "model": "onix", "post": "PAINT-B2" }
+}

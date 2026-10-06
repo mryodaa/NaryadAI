@@ -1,0 +1,8 @@
+{
+  "eventId": "wms-stock-20261007-13-KIT-J7-HARNESS",
+  "source": "wms",
+  "ts": "2026-10-07T13:00:00+05:00",
+  "area": "warehouse",
+  "type": "stock_level",
+  "payload": { "kitId": "KIT-J7-HARNESS", "model": "j7", "qty": 18, "shiftsLeft": 1.5 }
+}

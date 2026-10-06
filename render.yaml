@@ -1,0 +1,15 @@
+# Render: Blueprint для облачного демо (бесплатный тариф засыпает через 15 минут без запросов)
+services:
+  - type: web
+    name: allur-twin
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: SIMULATORS
+        value: "on"
+      - key: START_SPEED
+        value: "60"
+      - key: START_STAGE
+        value: "1"

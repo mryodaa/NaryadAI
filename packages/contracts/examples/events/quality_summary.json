@@ -1,0 +1,8 @@
+{
+  "eventId": "qls:quality:2026-10-02:0:paint",
+  "source": "qls",
+  "ts": "2026-10-02T16:10:00+05:00",
+  "area": "paint",
+  "type": "quality_summary",
+  "payload": { "date": "2026-10-02", "produced": 116, "defects": 6, "pct": 5.2 }
+}

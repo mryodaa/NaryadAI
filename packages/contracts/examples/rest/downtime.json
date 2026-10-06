@@ -1,0 +1,8 @@
+{
+  "source": "master",
+  "area": "assembly",
+  "equipmentId": "CONV-03",
+  "reason": "Обрыв цепи",
+  "category": "breakdown",
+  "registeredBy": "Мастер сборки"
+}

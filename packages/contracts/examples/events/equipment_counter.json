@@ -1,0 +1,9 @@
+{
+  "eventId": "plc:ABB-04:counter:2026-10-07T13:36:00+05:00",
+  "source": "plc",
+  "ts": "2026-10-07T13:36:00+05:00",
+  "area": "weld",
+  "equipmentId": "ABB-04",
+  "type": "equipment_counter",
+  "payload": { "cycles": 5641, "total": 48213 }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@allur/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@allur/contracts": "workspace:*",
+    "@allur/twin-core": "workspace:*",
+    "@fastify/static": "^10.1.5",
+    "@fastify/swagger": "^9.9.1",
+    "@fastify/swagger-ui": "^6.1.1",
+    "@fastify/websocket": "^11.3.3",
+    "aedes": "^1.2.0",
+    "fastify": "^5.12.5",
+    "tsx": "^4.23.15",
+    "ws": "^8.18.0",
+    "yaml": "^2.8.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0",
+    "mqtt": "^5.16.0",
+    "vitest": "^5.0.3"
+  }
+}

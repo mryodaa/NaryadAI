@@ -1,0 +1,313 @@
+asyncapi: 3.0.0
+info:
+  title: Цифровой двойник цеха — MQTT
+  version: 1.0.0
+  description: |
+    Контроллеры оборудования (через шлюз OPC UA → MQTT) и видеоаналитика камер публикуют
+    сообщения во встроенный брокер двойника. Двойник приводит их к каноническим событиям
+    (те же, что приходят из 1С по REST) и в ответ выдаёт наряды в топик allur/kst/twin/work-orders.
+
+    - Сообщения — JSON в UTF-8. Поле ts (ISO 8601 с часовым поясом) желательно: без него
+      двойник ставит время приёма.
+    - Некорректные сообщения не теряются молча: они видны на экране «Источники данных»
+      с причиной отказа.
+    - Топики allur/kst/twin/# и allur/kst/demo/# публикует только сам шлюз.
+    - clientId рекомендуется начинать с типа источника: plc-…, camera-… — так двойник
+      показывает, кто подключён.
+defaultContentType: application/json
+
+servers:
+  local:
+    host: localhost:1883
+    protocol: mqtt
+    description: Локальный запуск (TCP)
+  local-ws:
+    host: localhost:3000
+    pathname: /mqtt
+    protocol: ws
+    description: Локальный запуск, MQTT поверх WebSocket
+  cloud:
+    host: '{host}'
+    pathname: /mqtt
+    protocol: wss
+    description: Облачное демо — MQTT поверх WebSocket через порт HTTPS
+    variables:
+      host:
+        default: allur-twin.onrender.com
+
+channels:
+  equipmentState:
+    address: allur/kst/{area}/{equipmentId}/state
+    title: Состояние оборудования
+    description: Контроллер сообщает смену состояния (и периодически подтверждает текущее).
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      equipmentId:
+        $ref: '#/components/parameters/equipmentId'
+    messages:
+      equipmentState:
+        $ref: '#/components/messages/EquipmentState'
+  equipmentCounter:
+    address: allur/kst/{area}/{equipmentId}/counter
+    title: Счётчик циклов
+    description: Наработка оборудования в циклах (кузовах) — основа прогноза ресурса до ТО.
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      equipmentId:
+        $ref: '#/components/parameters/equipmentId'
+    messages:
+      equipmentCounter:
+        $ref: '#/components/messages/EquipmentCounter'
+  equipmentTelemetry:
+    address: allur/kst/{area}/{equipmentId}/telemetry
+    title: Телеметрия
+    description: Значения датчиков — перепад давления на фильтрах окрасочных камер (ступень 1), ток и вибрация привода конвейера (ступень 2).
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      equipmentId:
+        $ref: '#/components/parameters/equipmentId'
+    messages:
+      equipmentTelemetry:
+        $ref: '#/components/messages/EquipmentTelemetry'
+  cameraDetection:
+    address: allur/kst/{area}/camera/{cameraId}/detection
+    title: Детекции видеоаналитики
+    description: Видеоаналитика (RTSP-поток камеры → модель) сообщает о событиях на посту.
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      cameraId:
+        $ref: '#/components/parameters/cameraId'
+    messages:
+      cameraDetection:
+        $ref: '#/components/messages/CameraDetection'
+  workOrders:
+    address: allur/kst/twin/work-orders
+    title: Наряды от двойника
+    description: Руководитель принял решение по инциденту — двойник выдаёт наряд. В реальном внедрении наряд уходит в 1С:ТОиР или MES.
+    messages:
+      workOrder:
+        $ref: '#/components/messages/WorkOrder'
+  demoClock:
+    address: allur/kst/demo/clock
+    title: Часы демонстрации (служебный)
+    description: Только для имитаторов в прототипе — время симуляции, скорость, ступень и сценарий. Не часть контракта интеграции.
+    messages:
+      demoClock:
+        $ref: '#/components/messages/DemoClock'
+
+operations:
+  sendEquipmentState:
+    action: send
+    channel:
+      $ref: '#/channels/equipmentState'
+    summary: Контроллер публикует состояние
+  sendEquipmentCounter:
+    action: send
+    channel:
+      $ref: '#/channels/equipmentCounter'
+    summary: Контроллер публикует счётчик циклов
+  sendEquipmentTelemetry:
+    action: send
+    channel:
+      $ref: '#/channels/equipmentTelemetry'
+    summary: Контроллер или датчик публикует значение
+  sendCameraDetection:
+    action: send
+    channel:
+      $ref: '#/channels/cameraDetection'
+    summary: Видеоаналитика публикует детекцию
+  receiveWorkOrders:
+    action: receive
+    channel:
+      $ref: '#/channels/workOrders'
+    summary: Системы завода получают наряды двойника
+
+components:
+  parameters:
+    area:
+      enum: [warehouse, weld, paint, assembly, qc, finished]
+      description: Участок — warehouse (склад комплектующих), weld (сварка), paint (окраска), assembly (сборка), qc (ОТК), finished (склад готовой продукции)
+    equipmentId:
+      description: Код оборудования из справочника — ABB-01…ABB-04, PRETREAT, BOOTH-01, BOOTH-02, OVEN, CONV-03, QC-LINE, QC-TRACK, QC-RAIN
+      examples: [ABB-04, BOOTH-02, CONV-03]
+    cameraId:
+      description: Код камеры — CAM-WELD, CAM-PAINT, CAM-ASM, CAM-QC
+      examples: [CAM-ASM]
+
+  messages:
+    EquipmentState:
+      name: EquipmentState
+      title: Состояние оборудования
+      payload:
+        type: object
+        required: [status]
+        properties:
+          status:
+            type: string
+            enum: [run, idle, fault, maintenance]
+            description: run — работает, idle — ожидает, fault — авария, maintenance — обслуживание
+          code:
+            type: string
+            maxLength: 32
+            description: Код аварии контроллера
+          text:
+            type: string
+            maxLength: 200
+            description: Текст аварии
+          ts:
+            type: string
+            format: date-time
+            description: Время на контроллере
+      examples:
+        - name: Обрыв цепи конвейера
+          payload:
+            status: fault
+            code: E-2117
+            text: Обрыв приводной цепи
+            ts: '2026-10-07T10:05:00+05:00'
+
+    EquipmentCounter:
+      name: EquipmentCounter
+      title: Счётчик циклов
+      payload:
+        type: object
+        required: [cycles, total]
+        properties:
+          cycles:
+            type: integer
+            minimum: 0
+            description: Циклов с последнего ТО
+          total:
+            type: integer
+            minimum: 0
+            description: Циклов за весь срок службы
+          ts:
+            type: string
+            format: date-time
+      examples:
+        - name: Робот ABB-04
+          payload:
+            cycles: 5641
+            total: 48213
+            ts: '2026-10-07T13:36:00+05:00'
+
+    EquipmentTelemetry:
+      name: EquipmentTelemetry
+      title: Значение датчика
+      payload:
+        type: object
+        required: [metric, value]
+        properties:
+          metric:
+            type: string
+            enum: [filter_dp_pa, motor_current_a, vibration_mm_s]
+            description: filter_dp_pa — перепад давления на фильтре (Па), motor_current_a — ток привода (А), vibration_mm_s — вибрация (мм/с)
+          value:
+            type: number
+          ts:
+            type: string
+            format: date-time
+      examples:
+        - name: Перепад на фильтре Камеры-02
+          payload:
+            metric: filter_dp_pa
+            value: 312
+            ts: '2026-10-07T13:36:00+05:00'
+
+    CameraDetection:
+      name: CameraDetection
+      title: Детекция видеоаналитики
+      payload:
+        type: object
+        required: [kind]
+        properties:
+          kind:
+            type: string
+            enum: [line_stopped, queue, post_empty]
+            description: line_stopped — линия стоит, queue — очередь (value — число кузовов), post_empty — пост без оператора
+          value:
+            type: number
+          clipUrl:
+            type: string
+            description: Ссылка на фрагмент записи
+          ts:
+            type: string
+            format: date-time
+      examples:
+        - name: Линия сборки стоит
+          payload:
+            kind: line_stopped
+            clipUrl: /media/clips/assembly-stop.mp4
+            ts: '2026-10-07T10:06:00+05:00'
+
+    WorkOrder:
+      name: WorkOrder
+      title: Наряд от двойника
+      payload:
+        type: object
+        required: [workOrderId, incidentId, action, area, title, scheduledAt, issuedAt]
+        properties:
+          workOrderId:
+            type: string
+          incidentId:
+            type: string
+          action:
+            type: string
+            enum: [replace_filter, maintenance, repair, resequence, expedite_parts, inspect, none]
+          area:
+            type: string
+          equipmentId:
+            type: string
+          title:
+            type: string
+          scheduledAt:
+            type: string
+            format: date-time
+            description: Когда выполнить
+          durationMin:
+            type: number
+          issuedAt:
+            type: string
+            format: date-time
+          issuedBy:
+            type: string
+      examples:
+        - name: Замена фильтра в пересменку
+          payload:
+            workOrderId: wo-0001
+            incidentId: inc-quality-paint-0001
+            action: replace_filter
+            area: paint
+            equipmentId: BOOTH-02
+            title: Заменить фильтр Камеры-02 в пересменку
+            scheduledAt: '2026-10-07T16:00:00+05:00'
+            durationMin: 25
+            issuedAt: '2026-10-07T13:45:00+05:00'
+            issuedBy: Начальник производства
+
+    DemoClock:
+      name: DemoClock
+      title: Часы демонстрации
+      payload:
+        type: object
+        properties:
+          runId:
+            type: integer
+          seed:
+            type: integer
+          simTime:
+            type: number
+            description: Время симуляции, мс от 1970-01-01 UTC
+          speed:
+            type: number
+          paused:
+            type: boolean
+          stage:
+            type: integer
+            enum: [0, 1, 2]
+          scenario:
+            type: string

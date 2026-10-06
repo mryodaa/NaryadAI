@@ -1,0 +1,9 @@
+{
+  "month": "2026-10",
+  "target": 5500,
+  "models": [
+    { "model": "onix", "qty": 2500 },
+    { "model": "cobalt", "qty": 1800 },
+    { "model": "j7", "qty": 500 }
+  ]
+}

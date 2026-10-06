@@ -1,0 +1,8 @@
+[
+  { "date": "01.10.2026", "area": "Сварка", "produced": 118, "defects": 2, "pct": 1.7 },
+  { "date": "01.10.2026", "area": "Окраска", "produced": 115, "defects": 4, "pct": 3.5 },
+  { "date": "01.10.2026", "area": "Сборка", "produced": 121, "defects": 1, "pct": 0.8 },
+  { "date": "02.10.2026", "area": "Сварка", "produced": 111, "defects": 3, "pct": 2.7 },
+  { "date": "02.10.2026", "area": "Окраска", "produced": 116, "defects": 6, "pct": 5.2 },
+  { "date": "02.10.2026", "area": "Сборка", "produced": 119, "defects": 2, "pct": 1.7 }
+]
