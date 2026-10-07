@@ -1,12 +1,11 @@
 // Качество: доля брака по участкам и поиск причины — связь несоответствий по VIN
 // с состоянием оборудования в момент прохода кузова (раздел 9.3).
-import { DEFECT_BY_ID, type AreaId, type SourceId } from '@allur/contracts';
+// Какие камеры окраски с фильтром и где проверяют кузова — из конфигурации завода.
+import { DEFECT_BY_ID, inflect, type AreaId, type PlantEquipment, type SourceId } from '@allur/contracts';
 import type { TwinConfig } from './config';
 import type { TwinState } from './state';
+import { filterBooths, inspectionPass } from './plant';
 import { hm, num, num1, pct1, plural } from './text';
-
-/** Где проверяют кузова участка: проход этого поста = одна проверка */
-export const INSPECTION_POST: Partial<Record<AreaId, string>> = { weld: 'WELD-4', paint: 'PAINT-OVEN', assembly: 'QC-1' };
 
 export interface QualityWindow {
   area: AreaId;
@@ -18,13 +17,13 @@ export interface QualityWindow {
 }
 
 export function qualityWindow(state: TwinState, area: AreaId, from: number, to: number): QualityWindow {
-  const post = INSPECTION_POST[area];
+  const insp = inspectionPass(state.plant, state.plant.stageById.get(area));
   let inspected = 0;
-  if (post) {
+  if (insp) {
     for (let i = state.passes.length - 1; i >= 0; i--) {
       const p = state.passes[i]!;
       if (p.ts < from) break;
-      if (p.ts <= to && p.post === post) inspected++;
+      if (p.ts <= to && p.kind === insp.kind && p.area === insp.area) inspected++;
     }
   }
   const byDefect = new Map<string, number>();
@@ -42,6 +41,16 @@ export function qualityWindow(state: TwinState, area: AreaId, from: number, to: 
   return { area, inspected, defects, share: inspected > 0 ? defects / inspected : 0, top, firstDefectTs: first };
 }
 
+/** Самый высокий перепад на фильтрах камер участка в момент ts (null — данных нет) */
+export function maxBoothDp(state: TwinState, area: AreaId, ts: number): number | null {
+  let max: number | null = null;
+  for (const b of filterBooths(state.plant, area)) {
+    const v = state.valueAt(b.id, 'filter_dp_pa', ts);
+    if (v !== null && (max === null || v > max)) max = v;
+  }
+  return max;
+}
+
 /**
  * Тревога по качеству. Доля брака выше нормы за 2 часа и минимум 3 случая. Если контроллер
  * подтверждает причину (перепад на фильтре окраски выше 300 Па), хватает 2 случаев —
@@ -49,22 +58,25 @@ export function qualityWindow(state: TwinState, area: AreaId, from: number, to: 
  */
 export function qualityAlarm(state: TwinState, area: AreaId, now: number, cfg: TwinConfig, isOpen: boolean): { window: QualityWindow; alarm: boolean; supported: boolean } {
   const w = qualityWindow(state, area, now - cfg.qualityWindowMin * 60_000, now);
-  const dp = area === 'paint' ? state.valueAt('BOOTH-02', 'filter_dp_pa', now) : null;
+  const painting = state.plant.stageById.get(area)?.kind === 'painting';
+  const dp = painting ? maxBoothDp(state, area, now) : null;
   const supported = dp !== null && dp > cfg.filter.dirtyPa;
   const minDefects = supported ? 2 : 3;
   const limit = isOpen ? cfg.defectNorm * 0.75 : cfg.defectNorm;
   let alarm = w.inspected >= 10 && w.defects >= (isOpen ? Math.min(2, minDefects) : minDefects) && w.share > limit;
   // Фильтр уже заменили и перепад в норме: старый брак в окне не держит тревогу
-  if (alarm && area === 'paint' && dp !== null && dp < cfg.filter.normPa) {
-    const rep = lastFilterReplacement(state, now);
-    const lastDefect = Math.max(...state.nc.filter((n) => n.responsible === 'paint').map((n) => n.ts), 0);
+  if (alarm && painting && dp !== null && dp < cfg.filter.normPa) {
+    const rep = lastFilterReplacement(state, now, area);
+    const lastDefect = Math.max(...state.nc.filter((n) => n.responsible === area).map((n) => n.ts), 0);
     if (rep && rep.at > lastDefect) alarm = false;
   }
   return { window: w, alarm, supported };
 }
 
 export interface FilterCause {
-  equipmentId: 'BOOTH-02';
+  /** Камера окраски, на фильтр которой указывает брак */
+  equipmentId: string;
+  equipmentName: string;
   threshold: number;
   defectsAbove: number;
   defectsTotal: number;
@@ -81,15 +93,28 @@ export interface FilterCause {
 }
 
 /**
- * Сорность по VIN против перепада давления на фильтре Камеры-02 в момент прохода кузова.
+ * Сорность по VIN против перепада давления на фильтре камеры в момент прохода кузова.
  * Сравниваем долю брака выше и ниже порога; порог выбираем из нормативных 250/275/300/325 Па.
+ * Считаем для каждой камеры с фильтром и берём ту, где связь сильнее.
  */
-export function paintFilterCause(state: TwinState, now: number, cfg: TwinConfig, windowMin = 8 * 60): FilterCause | null {
+export function paintFilterCause(state: TwinState, now: number, cfg: TwinConfig, windowMin = 8 * 60, area?: AreaId): FilterCause | null {
+  let best: FilterCause | null = null;
+  for (const booth of filterBooths(state.plant, area)) {
+    const c = boothFilterCause(state, now, cfg, windowMin, booth);
+    if (c && (!best || c.lift > best.lift)) best = c;
+  }
+  return best;
+}
+
+function boothFilterCause(state: TwinState, now: number, cfg: TwinConfig, windowMin: number, booth: PlantEquipment): FilterCause | null {
   const from = now - windowMin * 60_000;
   const b2: { vin: string; ts: number; dp: number }[] = [];
+  // кузов прошёл камеру: первая отметка у неё (RFID — вход и выход, 1С:MES — проход поста)
+  const seen = new Set<string>();
   for (const p of state.passes) {
-    if (p.ts < from || p.ts > now || p.post !== 'PAINT-B2') continue;
-    const dp = state.valueAt('BOOTH-02', 'filter_dp_pa', p.ts);
+    if (p.ts < from || p.ts > now || p.kind !== 'mark' || p.equipmentId !== booth.id || seen.has(p.vin)) continue;
+    seen.add(p.vin);
+    const dp = state.valueAt(booth.id, 'filter_dp_pa', p.ts);
     if (dp !== null) b2.push({ vin: p.vin, ts: p.ts, dp });
   }
   if (b2.length < 10) return null;
@@ -100,7 +125,7 @@ export function paintFilterCause(state: TwinState, now: number, cfg: TwinConfig,
     dirty.add(n.vin);
     dirtyAt.set(n.vin, n.ts);
   }
-  // Перепад в момент прохода Камеры-02 — последний проход перед обнаружением брака
+  // Перепад в момент прохода камеры — последний проход перед обнаружением брака
   const dpOfDefect = new Map<string, number>();
   const passOfDefect = new Map<string, number>();
   for (const pass of b2) {
@@ -113,7 +138,7 @@ export function paintFilterCause(state: TwinState, now: number, cfg: TwinConfig,
   const defectsTotal = dpOfDefect.size;
   if (defectsTotal < 3) return null;
 
-  let best: Omit<FilterCause, 'equipmentId' | 'dpNow' | 'sentence' | 'points'> | null = null;
+  let best: Omit<FilterCause, 'equipmentId' | 'equipmentName' | 'dpNow' | 'sentence' | 'points'> | null = null;
   for (const threshold of [250, 275, 300, 325]) {
     const above = b2.filter((x) => x.dp > threshold);
     const below = b2.filter((x) => x.dp <= threshold);
@@ -128,11 +153,12 @@ export function paintFilterCause(state: TwinState, now: number, cfg: TwinConfig,
     if (!best || lift > best.lift * 1.25 || (threshold === cfg.filter.dirtyPa && lift >= best.lift * 0.8)) best = cand;
   }
   if (!best || best.defectsAbove < 2 || best.lift < 2) return null;
-  const dpNow = state.valueAt('BOOTH-02', 'filter_dp_pa', now);
+  const dpNow = state.valueAt(booth.id, 'filter_dp_pa', now);
   const where = best.threshold === cfg.filter.normPa ? `выше нормы ${cfg.filter.normPa} Па` : `выше ${best.threshold} Па (норма до ${cfg.filter.normPa})`;
-  const sentence = `${best.defectsAbove} из ${best.defectsTotal} ${plural(best.defectsTotal, ['кузова', 'кузовов', 'кузовов'])} с сорностью прошли Камеру-02, когда перепад давления на фильтре был ${where}`;
+  const sentence = `${best.defectsAbove} из ${best.defectsTotal} ${plural(best.defectsTotal, ['кузова', 'кузовов', 'кузовов'])} с сорностью прошли ${inflect(booth.name, 'acc')}, когда перепад давления на фильтре был ${where}`;
   return {
-    equipmentId: 'BOOTH-02',
+    equipmentId: booth.id,
+    equipmentName: booth.name,
     ...best,
     dpNow,
     sentence,
@@ -153,8 +179,8 @@ export interface FilterForecast {
  * Когда фильтр выйдет на предел. Рост перепада ускоряется по мере засорения, поэтому берём
  * экспоненциальную модель по точкам последних 90 минут работы: ln(dp − 40) растёт линейно во времени.
  */
-export function filterForecast(state: TwinState, now: number, cfg: TwinConfig): FilterForecast | null {
-  const s = state.series('BOOTH-02', 'filter_dp_pa');
+export function filterForecast(state: TwinState, now: number, cfg: TwinConfig, equipmentId: string): FilterForecast | null {
+  const s = state.series(equipmentId, 'filter_dp_pa');
   if (!s) return null;
   const xs: number[] = [];
   const ys: number[] = [];
@@ -187,22 +213,23 @@ export function filterForecast(state: TwinState, now: number, cfg: TwinConfig): 
   return { dpNow, ratePerHour, limitAt, method: 'экспоненциальный тренд перепада за последние 90 минут', samples: n };
 }
 
-/** Ступень 0: перепада не видно — опираемся на журнал замен фильтра в 1С:MES */
-export function lastFilterReplacement(state: TwinState, now: number): { at: number; source: SourceId } | null {
-  let best: { at: number; source: SourceId } | null = null;
+/** Ступень 0: перепада не видно — опираемся на журнал замен фильтра в 1С:MES (по камерам участка) */
+export function lastFilterReplacement(state: TwinState, now: number, area?: AreaId): { at: number; source: SourceId; equipmentId: string } | null {
+  const booths = new Set(filterBooths(state.plant, area).map((b) => b.id));
+  let best: { at: number; source: SourceId; equipmentId: string } | null = null;
   for (const d of state.downtimes.values()) {
-    if (d.equipmentId !== 'BOOTH-02' || !/фильтр/i.test(d.reason)) continue;
+    if (!booths.has(d.equipmentId) || !/фильтр/i.test(d.reason)) continue;
     const at = d.to ?? d.from;
     if (at > now) continue;
-    if (!best || at > best.at) best = { at, source: d.source };
+    if (!best || at > best.at) best = { at, source: d.source, equipmentId: d.equipmentId };
   }
   return best;
 }
 
-/** Среднее число кузовов между заменами фильтра по истории (для оценки на ступени 0) */
-export function typicalFilterLifeHours(state: TwinState): number {
+/** Сколько часов работы обычно живёт фильтр камеры — по истории замен (для оценки на ступени 0) */
+export function typicalFilterLifeHours(state: TwinState, equipmentId: string): number {
   const reps = [...state.downtimes.values()]
-    .filter((d) => d.equipmentId === 'BOOTH-02' && /фильтр/i.test(d.reason))
+    .filter((d) => d.equipmentId === equipmentId && /фильтр/i.test(d.reason))
     .map((d) => d.from)
     .sort((a, b) => a - b);
   if (reps.length < 3) return 17;

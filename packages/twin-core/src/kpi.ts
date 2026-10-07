@@ -1,9 +1,8 @@
 // Показатели смены (раздел 9.2): выпуск к этому моменту, OEE из трёх частей, брак, простои.
-import { EQUIPMENT_BY_ID, shiftAt, type AreaId, type ShiftRef } from '@allur/contracts';
+import { shiftAt, type AreaId, type ShiftRef } from '@allur/contracts';
 import type { TwinConfig } from './config';
 import type { TwinState } from './state';
-import { LAST_POST, PRODUCING } from './status';
-import { INSPECTION_POST } from './quality';
+import { equipmentName, inspectionPass, outputStage, qualityStages } from './plant';
 
 export interface Interval {
   from: number;
@@ -13,6 +12,8 @@ export interface Interval {
   source: 'plc' | 'mes' | 'master' | 'inferred';
   equipmentId?: string;
   micro?: boolean;
+  /** Встала одна из параллельных станций — участок при этом работает */
+  partial?: boolean;
 }
 
 /**
@@ -21,12 +22,16 @@ export interface Interval {
  */
 export function stopIntervals(state: TwinState, area: AreaId, from: number, to: number, cfg: TwinConfig, plc: boolean): Interval[] {
   const out: Interval[] = [];
+  const stage = state.plant.stageById.get(area);
+  // у участка с несколькими параллельными станциями остановка одной станции — не остановка участка
+  const partialOf = (equipmentId: string) => !!stage && stage.stations.length > 1 && state.plant.equipmentById.get(equipmentId)?.place === 'station';
   if (plc) {
     for (const a of state.autoStops) {
       if (a.area !== area) continue;
       const end = a.to ?? to;
       if (end <= from || a.from >= to) continue;
-      const name = EQUIPMENT_BY_ID[a.equipmentId]?.name ?? a.equipmentId;
+      const name = equipmentName(state.plant, a.equipmentId);
+      const partial = partialOf(a.equipmentId);
       out.push({
         from: Math.max(from, a.from),
         to: Math.min(to, end),
@@ -35,6 +40,7 @@ export function stopIntervals(state: TwinState, area: AreaId, from: number, to: 
         source: 'plc',
         equipmentId: a.equipmentId,
         micro: end - a.from < 5 * 60_000,
+        ...(partial ? { partial: true } : {}),
       });
     }
   }
@@ -44,7 +50,7 @@ export function stopIntervals(state: TwinState, area: AreaId, from: number, to: 
     if (end <= from || d.from >= to) continue;
     // если контроллеры подключены, их интервалы точнее записей мастера
     if (plc && out.some((o) => o.equipmentId === d.equipmentId && overlap(o, { from: d.from, to: end }))) continue;
-    const name = EQUIPMENT_BY_ID[d.equipmentId]?.name ?? d.equipmentId;
+    const name = equipmentName(state.plant, d.equipmentId);
     out.push({
       from: Math.max(from, d.from),
       to: Math.min(to, end),
@@ -52,12 +58,12 @@ export function stopIntervals(state: TwinState, area: AreaId, from: number, to: 
       label: d.category === 'no_parts' ? d.reason : `${name}: ${d.reason.toLowerCase()}`,
       source: d.source === 'master' ? 'master' : 'mes',
       equipmentId: d.equipmentId,
+      ...(d.category !== 'no_parts' && partialOf(d.equipmentId) ? { partial: true } : {}),
     });
   }
   if (!plc) {
     // разрывы в проходе VIN, которые не объяснены записями
-    const post = LAST_POST[area as 'weld'];
-    if (post) {
+    if (stage?.producing) {
       const limit = cfg.stopTakts * cfg.taktMin * 60_000;
       let prev = Math.max(from, state.runStartMs);
       const passes = state.passes.filter((p) => p.area === area && p.ts >= from && p.ts <= to);
@@ -106,13 +112,18 @@ export interface ShiftKpis {
   elapsedMin: number;
   done: number;
   planToNow: number;
-  areaDone: Record<'weld' | 'paint' | 'assembly' | 'qc' | 'finished', number>;
+  /** Выпуск участков за смену; у склада готовой продукции — принято */
+  areaDone: Record<AreaId, number>;
   oee: { value: number; availability: number; performance: number; quality: number; stopMin: number; plannedMin: number };
   defects: { pct: number; defects: number; inspected: number; worst: { area: AreaId; share: number } | null; byArea: Partial<Record<AreaId, { defects: number; inspected: number }>> };
 }
 
 export function shiftKpis(state: TwinState, now: number, cfg: TwinConfig, shift: ShiftRef | null = shiftAt(now)): ShiftKpis {
-  const areaDone = { weld: 0, paint: 0, assembly: 0, qc: 0, finished: 0 };
+  const plant = state.plant;
+  const finishedId = plant.warehouseOut?.id;
+  const areaDone: Record<AreaId, number> = {};
+  for (const st of plant.production) areaDone[st.id] = 0;
+  if (finishedId) areaDone[finishedId] = 0;
   if (!shift) {
     return {
       shift: null,
@@ -126,18 +137,19 @@ export function shiftKpis(state: TwinState, now: number, cfg: TwinConfig, shift:
   }
   const end = Math.min(now, shift.endMs);
   const elapsedMin = Math.max(0, (end - shift.startMs) / 60_000);
-  for (const a of PRODUCING) areaDone[a] = state.count(shift.key, LAST_POST[a]);
-  areaDone.finished = state.count(shift.key, 'FG-IN');
-  const done = areaDone.finished;
+  for (const st of plant.production) areaDone[st.id] = state.stageDone(shift.key, st.id);
+  if (finishedId) areaDone[finishedId] = state.stageDone(shift.key, finishedId);
+  const done = finishedId ? areaDone[finishedId]! : 0;
   const planToNow = Math.min(cfg.shiftPlan, Math.floor(elapsedMin / cfg.taktMin));
 
   // Брак смены: несоответствия на проверках сварки, окраски и сборки
   const byArea: ShiftKpis['defects']['byArea'] = {};
   let inspected = 0;
   let defects = 0;
-  for (const area of ['weld', 'paint', 'assembly'] as const) {
-    const post = INSPECTION_POST[area]!;
-    const ins = state.count(shift.key, post);
+  for (const stage of qualityStages(plant)) {
+    const area = stage.id;
+    const insp = inspectionPass(plant, stage);
+    const ins = !insp ? 0 : insp.kind === 'entry' ? state.entered(shift.key, insp.area) : state.stageDone(shift.key, insp.area);
     let d = 0;
     for (const n of state.nc) if (n.responsible === area && n.ts >= shift.startMs && n.ts <= end) d += n.count;
     byArea[area] = { defects: d, inspected: ins };
@@ -152,17 +164,19 @@ export function shiftKpis(state: TwinState, now: number, cfg: TwinConfig, shift:
 
   // OEE линии по сборке, которая задаёт ритм: доступность × производительность × качество
   const plc = state.plcConnected(now);
-  const stopMin = Math.min(elapsedMin, totalMinutes(stopIntervals(state, 'assembly', shift.startMs, end, cfg, plc)));
+  const out = outputStage(plant);
+  const stops = out ? stopIntervals(state, out.id, shift.startMs, end, cfg, plc).filter((i) => !i.partial) : [];
+  const stopMin = Math.min(elapsedMin, totalMinutes(stops));
   const runMin = Math.max(1, elapsedMin - stopMin);
   const availability = elapsedMin > 0 ? runMin / elapsedMin : 1;
-  const performance = Math.min(1, (areaDone.assembly * cfg.taktMin) / runMin);
+  const performance = Math.min(1, ((out ? areaDone[out.id]! : 0) * cfg.taktMin) / runMin);
   const vinsWithNc = new Set(state.nc.filter((n) => n.vin && n.ts >= shift.startMs - 8 * 3600_000).map((n) => n.vin!));
   let firstPass = 0;
   let finished = 0;
   for (let i = state.passes.length - 1; i >= 0; i--) {
     const p = state.passes[i]!;
     if (p.ts < shift.startMs) break;
-    if (p.post !== 'FG-IN' || p.ts > end) continue;
+    if (p.ts > end || !state.isFinishPass(p)) continue;
     finished++;
     if (!vinsWithNc.has(p.vin)) firstPass++;
   }
@@ -182,11 +196,11 @@ export function shiftKpis(state: TwinState, now: number, cfg: TwinConfig, shift:
 export function criticalDowntimeToday(state: TwinState, now: number, cfg: TwinConfig, dayStart: number): { minutes: number; items: Interval[] } {
   const plc = state.plcConnected(now);
   const items: Interval[] = [];
-  for (const area of PRODUCING) {
-    for (const i of stopIntervals(state, area, dayStart, now, cfg, plc)) {
+  for (const stage of state.plant.production) {
+    for (const i of stopIntervals(state, stage.id, dayStart, now, cfg, plc)) {
       if (i.kind === 'maintenance' && /план|наряд/i.test(i.label)) continue;
       // считаем только остановки, привязанные к критическому оборудованию
-      if (!i.equipmentId || !EQUIPMENT_BY_ID[i.equipmentId]?.critical) continue;
+      if (!i.equipmentId || !state.plant.equipmentById.get(i.equipmentId)?.critical) continue;
       items.push(i);
     }
   }

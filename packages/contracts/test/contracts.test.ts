@@ -41,7 +41,7 @@ describe('примеры сообщений соответствуют схем�
   it('REST: качество', () => expect(QualityRequest.safeParse(ex.rest.quality).success).toBe(true));
   it('REST: решение', () => expect(DecisionRequest.safeParse(ex.rest.decision).success).toBe(true));
   it('MQTT: наряд', () => expect(WorkOrder.safeParse(ex.mqtt.work_order!.payload).success).toBe(true));
-  for (const name of ['plc_state', 'plc_counter', 'plc_telemetry', 'camera_detection']) {
+  for (const name of ['plc_state', 'plc_counter', 'plc_telemetry', 'camera_detection', 'body_checkpoint', 'operation_result']) {
     it(`MQTT: ${name} приводится к событию`, () => {
       const m = ex.mqtt[name]!;
       const r = mqttToEvent(m.topic, JSON.stringify(m.payload), DEMO_START_MS);

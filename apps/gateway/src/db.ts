@@ -20,6 +20,15 @@ export interface ValidationErrorRow {
   sample: string | null;
 }
 
+export interface PlantVersionRow {
+  version: number;
+  created_at: number;
+  created_by: string;
+  comment: string | null;
+  source: 'seed' | 'apply' | 'rollback' | 'import' | 'connection' | 'demo';
+  body: string;
+}
+
 export class Db {
   readonly raw: DatabaseSync;
   private insertEvent: StatementSync;
@@ -65,6 +74,22 @@ export class Db {
         work_order TEXT
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS plant_versions (
+        version INTEGER PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        created_by TEXT NOT NULL,
+        comment TEXT,
+        source TEXT NOT NULL,
+        body TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS plant_scenarios (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        base_version INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        impact TEXT
+      );
     `);
     this.insertEvent = this.raw.prepare(
       `INSERT OR IGNORE INTO events (event_id, run_id, source, type, ts, area, equipment_id, vin, body, received_at)
@@ -145,6 +170,11 @@ export class Db {
     this.raw.exec(`DELETE FROM events WHERE run_id <> 0; DELETE FROM decisions;`);
   }
 
+  /** Исходный состав цеха поменялся: история (run_id = 0) и версии конфигурации собраны на старом */
+  resetForNewSeed() {
+    this.raw.exec(`DELETE FROM events WHERE run_id = 0; DELETE FROM plant_versions; DELETE FROM decisions;`);
+  }
+
   getSetting<T>(key: string): T | undefined {
     const r = this.raw.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
     return r ? (JSON.parse(r.value) as T) : undefined;
@@ -152,6 +182,32 @@ export class Db {
 
   setSetting(key: string, value: unknown) {
     this.raw.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, JSON.stringify(value));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Конфигурация завода: каждая применённая версия — новая строка, история линейная
+
+  plantVersions(): PlantVersionRow[] {
+    return this.raw.prepare(`SELECT version, created_at, created_by, comment, source, body FROM plant_versions ORDER BY version DESC`).all() as unknown as PlantVersionRow[];
+  }
+
+  plantVersion(version: number): PlantVersionRow | undefined {
+    return this.raw.prepare(`SELECT version, created_at, created_by, comment, source, body FROM plant_versions WHERE version = ?`).get(version) as unknown as PlantVersionRow | undefined;
+  }
+
+  latestPlantVersion(): PlantVersionRow | undefined {
+    return this.raw.prepare(`SELECT version, created_at, created_by, comment, source, body FROM plant_versions ORDER BY version DESC LIMIT 1`).get() as unknown as PlantVersionRow | undefined;
+  }
+
+  addPlantVersion(r: PlantVersionRow) {
+    this.raw
+      .prepare(`INSERT INTO plant_versions (version, created_at, created_by, comment, source, body) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(r.version, r.created_at, r.created_by, r.comment, r.source, r.body);
+  }
+
+  /** Исходная версия поменялась в коде, а правок ещё не было — обновляем её на месте */
+  replacePlantVersion(version: number, body: string) {
+    this.raw.prepare(`UPDATE plant_versions SET body = ? WHERE version = ?`).run(body, version);
   }
 
   addDecision(d: { id: string; runId: number; incidentId: string; optionId: string; decidedAt: number; decidedBy?: string; workOrder?: unknown }) {

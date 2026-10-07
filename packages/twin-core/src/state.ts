@@ -1,6 +1,8 @@
-// Состояние двойника — только то, что пришло событиями. Никакого знания об имитаторах.
+// Состояние двойника — только то, что пришло событиями, и состав цеха из конфигурации.
+// Никакого знания об имитаторах.
+import { BodyTracker, type TrackTransition } from './tracker';
 import {
-  EQUIPMENT,
+  SEED_MODEL,
   shiftAt,
   type AreaId,
   type CanonicalEvent,
@@ -8,24 +10,24 @@ import {
   type EquipmentStatus,
   type MetricId,
   type ModelId,
+  type PlantModel,
   type SourceId,
 } from '@allur/contracts';
 
+/**
+ * Отметка кузова, учтённая двойником (из трекера): вход и выход участка, отметка у оборудования.
+ * vin — VIN кузова или его внутренний номер, пока VIN не нанесён.
+ */
 export interface Pass {
+  /** Код точки отметки или поста 1С:MES */
   post: string;
   area: AreaId;
   ts: number;
   vin: string;
   model: ModelId;
-}
-
-export interface Body {
-  vin: string;
-  model: ModelId;
-  lastPost: string;
-  lastArea: AreaId;
-  lastTs: number;
-  passes: { post: string; ts: number }[];
+  kind: 'entry' | 'exit' | 'mark';
+  equipmentId?: string;
+  restored?: boolean;
 }
 
 export interface Nc {
@@ -129,13 +131,17 @@ export interface PlanRec {
 const SERIES_LIMIT = 3000;
 
 export class TwinState {
+  /** Состав цеха (конфигурация завода) */
+  plant: PlantModel;
   runStartMs = 0;
-  bodies = new Map<string, Body>();
-  /** Кузова, ещё не дошедшие до склада готовой продукции */
-  active = new Map<string, Body>();
-  /** Проходы текущего прогона (дня) по порядку времени */
+  /** Трекер кузовов: где каждый кузов, маршрут, история */
+  tracker: BodyTracker;
+  /** Отметки текущего прогона (дня) по порядку времени */
   passes: Pass[] = [];
-  postCount = new Map<string, number>();
+  /** Входов на участок за смену («смена|участок») — для ОТК это число проверенных после сборки */
+  entryCount = new Map<string, number>();
+  /** Кузовов, покинувших участок за смену («смена|участок»); у склада готовой продукции — принято */
+  exitCount = new Map<string, number>();
   lastPassByArea: Partial<Record<AreaId, number>> = {};
   nc: Nc[] = [];
   downtimes = new Map<string, DowntimeRec>();
@@ -148,19 +154,31 @@ export class TwinState {
   stock = new Map<string, StockRec>();
   camera: CameraRec[] = [];
   lastBySource: Partial<Record<SourceId, number>> = {};
-  /** Кузова, ушедшие на повторную окраску и ещё не прошедшие Камеру-02 */
-  repaintPending = new Set<string>();
   /** Время последнего события любого источника (по часам событий) */
   lastEventTs = 0;
 
-  constructor() {
-    this.resetEq();
+  constructor(plant: PlantModel = SEED_MODEL) {
+    this.plant = plant;
+    this.tracker = new BodyTracker(plant);
+    this.tracker.onTransition = (t) => this.onTransition(t);
+    this.eq = {};
+    this.addEquipment();
   }
 
-  private resetEq() {
-    this.eq = Object.fromEntries(
-      EQUIPMENT.map((e) => [e.id, { id: e.id, area: e.area, status: null, since: 0, lastPlcTs: null, cycles: null, total: null, cyclesTs: null } satisfies EqState]),
-    );
+  /** Новый состав цеха: появившееся оборудование получает пустое состояние, накопленное — сохраняется */
+  setPlant(plant: PlantModel) {
+    this.plant = plant;
+    this.tracker.setPlant(plant);
+    this.addEquipment();
+  }
+
+  private addEquipment() {
+    for (const e of this.plant.equipment) {
+      if (e.passive) continue;
+      const s = this.eq[e.id];
+      if (s) s.area = e.stageId;
+      else this.eq[e.id] = { id: e.id, area: e.stageId, status: null, since: 0, lastPlcTs: null, cycles: null, total: null, cyclesTs: null } satisfies EqState;
+    }
   }
 
   ingest(e: CanonicalEvent) {
@@ -169,35 +187,23 @@ export class TwinState {
     if (e.type !== 'shift_report' && e.type !== 'quality_summary' && e.type !== 'plan_set') this.lastEventTs = Math.max(this.lastEventTs, ts);
 
     switch (e.type) {
-      case 'post_passed': {
-        let body = this.bodies.get(e.vin);
-        if (!body) {
-          body = { vin: e.vin, model: e.payload.model, lastPost: e.payload.post, lastArea: e.area, lastTs: ts, passes: [] };
-          this.bodies.set(e.vin, body);
-        }
-        body.passes.push({ post: e.payload.post, ts });
-        if (ts >= body.lastTs) {
-          body.lastPost = e.payload.post;
-          body.lastArea = e.area;
-          body.lastTs = ts;
-        }
-        if (e.payload.post === 'PAINT-B2') this.repaintPending.delete(e.vin);
-        if (body.lastPost === 'FG-IN') this.active.delete(e.vin);
-        else this.active.set(e.vin, body);
-        if (ts >= this.runStartMs) {
-          const pass: Pass = { post: e.payload.post, area: e.area, ts, vin: e.vin, model: e.payload.model };
-          insertSorted(this.passes, pass);
-          const shift = shiftAt(ts);
-          if (shift) {
-            const k = `${shift.key}|${e.payload.post}`;
-            this.postCount.set(k, (this.postCount.get(k) ?? 0) + 1);
-          }
-          this.lastPassByArea[e.area] = Math.max(this.lastPassByArea[e.area] ?? 0, ts);
-        }
+      case 'post_passed':
+        this.tracker.postPassed(e.vin, e.payload.model, e.payload.post, ts, e.source);
         break;
-      }
+      case 'production_order':
+        this.tracker.order({ bodyId: e.payload.bodyId, vin: e.vin, model: e.payload.model, colorCode: e.payload.colorCode, trim: e.payload.trim, plannedSeq: e.payload.plannedSeq, ts, source: e.source });
+        break;
+      case 'body_checkpoint':
+        this.tracker.checkpoint({ bodyId: e.payload.bodyId, vin: e.vin, checkpointId: e.payload.checkpointId, direction: e.payload.direction, postId: e.payload.postId, ts, source: e.source });
+        break;
+      case 'operation_result':
+        this.tracker.operation({ bodyId: e.payload.bodyId, vin: e.vin, equipmentId: e.equipmentId, operation: e.payload.operation, result: e.payload.result, details: e.payload.details, ts, source: e.source });
+        break;
+      case 'vin_assigned':
+        this.tracker.vinAssigned(e.payload.bodyId, e.vin, ts, e.source);
+        break;
       case 'nonconformity':
-        if (e.vin && e.payload.decision === 'repaint') this.repaintPending.add(e.vin);
+        this.tracker.nonconformity(e.vin, e.area, e.payload.decision, `${e.payload.checkpoint}: ${e.payload.defect} → ${e.payload.decision}`, ts, e.source);
         this.nc.push({
           ts,
           vin: e.vin,
@@ -313,9 +319,43 @@ export class TwinState {
     }
   }
 
-  /** Сколько кузовов прошло пост за смену */
-  count(shiftKey: string, post: string): number {
-    return this.postCount.get(`${shiftKey}|${post}`) ?? 0;
+  /** Переход из трекера: вход и выход участка, отметка у оборудования — в счётчики смены */
+  private onTransition(t: TrackTransition) {
+    if (t.ts < this.runStartMs) return;
+    const b = t.body;
+    const pass: Pass = {
+      post: t.pointId ?? t.postId ?? t.stageId,
+      area: t.stageId,
+      ts: t.ts,
+      vin: b.vin ?? b.bodyId,
+      model: b.model ?? 'onix',
+      kind: t.kind,
+      equipmentId: t.equipmentId,
+      restored: t.restored,
+    };
+    insertSorted(this.passes, pass);
+    this.lastPassByArea[t.stageId] = Math.max(this.lastPassByArea[t.stageId] ?? 0, t.ts);
+    const shift = shiftAt(t.ts);
+    if (!shift) return;
+    const k = `${shift.key}|${t.stageId}`;
+    const finished = this.plant.warehouseOut?.id === t.stageId;
+    if (t.kind === 'entry') this.entryCount.set(k, (this.entryCount.get(k) ?? 0) + 1);
+    if (t.kind === 'exit' || (finished && t.kind === 'entry')) this.exitCount.set(k, (this.exitCount.get(k) ?? 0) + 1);
+  }
+
+  /** Сколько кузовов вошло на участок за смену */
+  entered(shiftKey: string, stageId: string): number {
+    return this.entryCount.get(`${shiftKey}|${stageId}`) ?? 0;
+  }
+
+  /** Отметка — выпуск завода: приёмка на склад готовой продукции */
+  isFinishPass(p: Pass): boolean {
+    return p.kind === 'entry' && p.area === this.plant.warehouseOut?.id;
+  }
+
+  /** Сколько кузовов покинуло участок за смену (на склад ГП — принято) */
+  stageDone(shiftKey: string, stageId: string): number {
+    return this.exitCount.get(`${shiftKey}|${stageId}`) ?? 0;
   }
 
   series(equipmentId: string, metric: MetricId): Series | undefined {

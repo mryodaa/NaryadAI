@@ -1,7 +1,7 @@
 // Связка шлюза с ядром двойника. Ядро (twin-core) — чистая логика без сети;
 // шлюз кормит его событиями и тиками часов, забирает снимки и выдаёт решения нарядами.
-import { Twin, NO_LEVERS, type Levers, type MoneyParams } from '@allur/twin-core';
-import type { CanonicalEvent, LiveSnapshot, WorkOrder } from '@allur/contracts';
+import { Twin, NO_LEVERS, plantCapacity, type Levers, type MoneyParams, type PlantCapacityView } from '@allur/twin-core';
+import { derivePlant, type CanonicalEvent, type LiveSnapshot, type PlantConfig, type WorkOrder } from '@allur/contracts';
 import type { Db } from './db';
 import type { DemoClock } from './clock';
 
@@ -20,8 +20,9 @@ export class TwinService {
   constructor(
     private db: Db,
     private clock: DemoClock,
+    plant: PlantConfig,
   ) {
-    this.twin = new Twin();
+    this.twin = new Twin({}, plant);
     const money = db.getSetting<Partial<MoneyParams>>('money');
     if (money) this.twin.setMoney(money);
     this.reset(clock.runStartMs);
@@ -29,6 +30,23 @@ export class TwinService {
 
   ingest(e: CanonicalEvent) {
     this.twin.ingest(e);
+  }
+
+  /** Применена новая конфигурация завода — двойник перестраивается без перезапуска */
+  setPlant(plant: PlantConfig) {
+    this.twin.setPlant(plant);
+  }
+
+  /** Пропускная способность участков для варианта состава — на той же истории простоев и брака */
+  capacity(plant: PlantConfig): PlantCapacityView {
+    return plantCapacity(this.twin.state, this.clock.now(), this.twin.cfg, derivePlant(plant));
+  }
+
+  /** Открытые инциденты по оборудованию: удалять такое оборудование нельзя */
+  openIncidentsByEquipment(): Map<string, { id: string; title: string }> {
+    const m = new Map<string, { id: string; title: string }>();
+    for (const i of this.twin.incidents()) if (i.equipmentId && !m.has(i.equipmentId)) m.set(i.equipmentId, { id: i.id, title: i.title });
+    return m;
   }
 
   tick(now: number) {
@@ -75,6 +93,14 @@ export class TwinService {
 
   checks() {
     return this.twin.checks();
+  }
+
+  bodies(now: number) {
+    return this.twin.ready ? this.twin.bodies(now) : [];
+  }
+
+  body(idOrVin: string, now: number) {
+    return this.twin.body(idOrVin, now);
   }
 
   passport(vin: string, events: CanonicalEvent[], now: number) {

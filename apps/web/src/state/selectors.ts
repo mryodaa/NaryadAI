@@ -1,12 +1,9 @@
-// Слова и числа по участкам — общие для «Панели» и 3D: один источник правды — снимок двойника.
-// Здесь только то, что выводится из снимка; своей модели цеха у интерфейса нет.
+// Слова и числа по участкам — общие для «Панели» и 3D: один источник правды — снимок двойника,
+// состав цеха — конфигурация завода. Своей модели цеха у интерфейса нет.
 import type { LucideIcon } from 'lucide-react';
-import { AREA_BY_ID, BUFFERS, type AreaId, type AreaView, type BufferView, type LiveSnapshot, type Tone } from '@allur/contracts/ref';
+import type { AreaId, AreaView, BufferView, LiveSnapshot, PlantModel, PlantStage, StageKind, Tone } from '@allur/contracts/ref';
 import { AREA_STATUS, TONE_ICON } from '../lib/tones';
 import { num1, pct0, pct1 } from '../lib/format';
-
-/** Порядок потока производства: так участки идут и в «Панели», и в 3D */
-export const FLOW: readonly AreaId[] = ['warehouse', 'weld', 'paint', 'assembly', 'qc', 'finished'];
 
 /** Запаса меньше двух смен — дефицит (то же правило, что у инцидента по складу) */
 const STOCK_LOW_SHIFTS = 2;
@@ -24,6 +21,7 @@ export interface TextView {
 
 export interface AreaRowView {
   id: AreaId;
+  kind: StageKind;
   name: string;
   status: StatusView;
   /** Выпуск за смену и план к этому моменту; у склада комплектующих нет */
@@ -34,31 +32,28 @@ export interface AreaRowView {
   reason: TextView | null;
 }
 
-const ROW_NAME: Record<AreaId, string> = {
-  warehouse: AREA_BY_ID.warehouse.name,
-  weld: AREA_BY_ID.weld.name,
-  paint: AREA_BY_ID.paint.name,
-  assembly: AREA_BY_ID.assembly.name,
-  qc: AREA_BY_ID.qc.short,
-  finished: AREA_BY_ID.finished.name,
-};
+/** Название строки участка: у ОТК — короткое, у остальных — полное */
+export function rowName(stage: PlantStage): string {
+  return stage.kind === 'inspection' ? stage.short : stage.name;
+}
 
 function stockLow(a: AreaView): boolean {
   return !!a.worstKit && a.worstKit.shiftsLeft < STOCK_LOW_SHIFTS;
 }
 
 /** У складов нет такта: их статус — запас и приёмка, как на карточках потока */
-export function areaStatus(a: AreaView): StatusView {
-  if (a.id === 'warehouse') {
+export function areaStatus(a: AreaView, kind: StageKind): StatusView {
+  if (kind === 'warehouse_in') {
     return stockLow(a) ? { label: 'Есть дефицит', tone: 'attention', icon: TONE_ICON.attention } : { label: 'Запас в норме', tone: 'neutral', icon: TONE_ICON.neutral };
   }
-  if (a.id === 'finished') return { label: 'Принимает', tone: 'neutral', icon: TONE_ICON.neutral };
+  if (kind === 'warehouse_out') return { label: 'Принимает', tone: 'neutral', icon: TONE_ICON.neutral };
   return AREA_STATUS[a.status];
 }
 
 /**
  * Загрузка участка за смену — доля времени без остановок (как «Загрузка, %» в отчёте «Работа линий»).
- * Считается по тем же отрезкам простоя, что рисует лента смены; отрезки брака (не остановки) не входят.
+ * Считается по тем же отрезкам простоя, что рисует лента смены; отрезки брака (не остановки) и остановки
+ * одной из параллельных станций (участок работает) не входят.
  */
 export function areaLoad(s: LiveSnapshot, area: AreaId): number | null {
   if (!s.shift) return null;
@@ -67,7 +62,7 @@ export function areaLoad(s: LiveSnapshot, area: AreaId): number | null {
   const elapsed = now - start;
   if (elapsed < 10 * 60_000) return null;
   const stops = s.timeline.segments
-    .filter((g) => g.area === area && g.tone !== 'attention')
+    .filter((g) => g.area === area && g.tone !== 'attention' && !g.label.endsWith('(остальные станции работают)'))
     .map((g) => [Math.max(start, Date.parse(g.from)), Math.min(now, g.to ? Date.parse(g.to) : now)] as const)
     .filter(([from, to]) => to > from)
     .sort((x, y) => x[0] - y[0]);
@@ -85,60 +80,68 @@ export function areaLoad(s: LiveSnapshot, area: AreaId): number | null {
   return Math.max(0, Math.min(1, 1 - stopped / elapsed));
 }
 
-/** Доля брака окраски за смену: если окраска — худший участок, берём то же число, что в плитке «Брак за смену» */
-export function paintDefectLive(s: LiveSnapshot): number | null {
-  const worst = s.kpi.defects.worst;
-  return worst && worst.area === 'paint' ? worst.pct : null;
+/** Участок окраски, по которому показываем брак (первый участок вида «окраска») */
+export function paintStageId(model: PlantModel): AreaId | null {
+  return model.stages.find((st) => st.kind === 'painting')?.id ?? null;
 }
 
-function areaMetric(s: LiveSnapshot, a: AreaView, paintDefect: number | null): TextView | null {
-  switch (a.id) {
-    case 'warehouse':
+/** Доля брака окраски за смену: если окраска — худший участок, берём то же число, что в плитке «Брак за смену» */
+export function paintDefectLive(s: LiveSnapshot, paintId: AreaId | null): number | null {
+  const worst = s.kpi.defects.worst;
+  return worst && paintId && worst.area === paintId ? worst.pct : null;
+}
+
+function areaMetric(s: LiveSnapshot, a: AreaView, kind: StageKind, isPaint: boolean, paintDefect: number | null): TextView | null {
+  switch (kind) {
+    case 'warehouse_in':
       return a.worstKit ? { text: `запас на ${num1(a.worstKit.shiftsLeft)} смены · ${a.worstKit.name}`, tone: stockLow(a) ? 'attention' : 'neutral' } : null;
-    case 'paint': {
-      if (paintDefect === null) return null;
-      const norm = s.kpi.defects.norm;
-      return { text: `брак ${pct1(paintDefect)} · норма ${pct0(norm)}`, tone: paintDefect > norm ? 'attention' : 'neutral' };
-    }
-    case 'finished':
+    case 'warehouse_out':
       return null;
     default: {
+      if (isPaint) {
+        if (paintDefect === null) return null;
+        const norm = s.kpi.defects.norm;
+        return { text: `брак ${pct1(paintDefect)} · норма ${pct0(norm)}`, tone: paintDefect > norm ? 'attention' : 'neutral' };
+      }
       const load = areaLoad(s, a.id);
       return load === null ? null : { text: `загрузка ${pct0(load)}`, tone: 'neutral' };
     }
   }
 }
 
-function areaReason(s: LiveSnapshot, a: AreaView, status: StatusView): TextView | null {
+function areaReason(s: LiveSnapshot, a: AreaView, kind: StageKind, status: StatusView): TextView | null {
   if (a.reason) return { text: a.reason, tone: status.tone };
   // нет отклонения статуса, но есть инцидент участка в «Требует внимания» — показываем его же словами
   const item = s.attention.find((i) => i.area === a.id);
   if (!item) return null;
   const decided = item.tone === 'neutral';
-  return { text: decided || a.id === 'warehouse' ? item.impact : item.title, tone: item.tone };
+  return { text: decided || kind === 'warehouse_in' ? item.impact : item.title, tone: item.tone };
 }
 
-export function areaRows(s: LiveSnapshot, paintDefect: number | null): AreaRowView[] {
+/** Строки участков по потоку — порядок и названия из конфигурации завода */
+export function areaRows(s: LiveSnapshot, paintDefect: number | null, model: PlantModel): AreaRowView[] {
   const byId = new Map(s.areas.map((a) => [a.id, a]));
-  return FLOW.flatMap((id) => {
-    const a = byId.get(id);
+  const paintId = paintStageId(model);
+  return model.stages.flatMap((stage) => {
+    const a = byId.get(stage.id);
     if (!a) return [];
-    const status = areaStatus(a);
+    const status = areaStatus(a, stage.kind);
     return [
       {
-        id,
-        name: ROW_NAME[id],
+        id: stage.id,
+        kind: stage.kind,
+        name: rowName(stage),
         status,
-        output: id === 'warehouse' ? null : { done: a.done, plan: a.planToNow },
-        metric: areaMetric(s, a, paintDefect),
-        reason: areaReason(s, a, status),
+        output: stage.kind === 'warehouse_in' ? null : { done: a.done, plan: a.planToNow },
+        metric: areaMetric(s, a, stage.kind, stage.id === paintId, paintDefect),
+        reason: areaReason(s, a, stage.kind, status),
       },
     ];
   });
 }
 
 /** Буфер сразу после участка по потоку (между складом и сваркой, ОТК и складом ГП буферов нет) */
-export function bufferAfter(s: LiveSnapshot, area: AreaId): BufferView | null {
-  const def = BUFFERS.find((b) => b.from === area);
-  return def ? (s.buffers.find((b) => b.id === def.id) ?? null) : null;
+export function bufferAfter(s: LiveSnapshot, area: AreaId, model: PlantModel): BufferView | null {
+  const id = model.stageById.get(area)?.bufferAfter?.id;
+  return id ? (s.buffers.find((b) => b.id === id) ?? null) : null;
 }

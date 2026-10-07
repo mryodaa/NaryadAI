@@ -3,28 +3,31 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Canvas, invalidate } from '@react-three/fiber';
 import { ArrowLeft, Info, MousePointerClick, Route, WifiOff, X } from 'lucide-react';
-import type { AreaId, LiveSnapshot } from '@allur/contracts/ref';
+import { MODEL_BY_ID, inflectLower, type AreaId, type BodyView, type LiveSnapshot } from '@allur/contracts/ref';
 import { useLive } from '../../state/live';
+import { usePlantModel } from '../../state/plant';
 import { backToPlant, clearVinPath, openAreaPanel, selectArea, setTour, useView } from '../../state/view';
 import { EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { BODIES, num, pct0, plural } from '../../lib/format';
-import { buildLayout, PRODUCING } from './layout';
+import { buildLayout, type PlantLayout } from './layout';
 import { readPalette } from './palette';
-import { FlowModel, type FlowInput } from './flow';
+import { BodyFlow } from './flow';
 import { useSceneData, type SceneData } from './useSceneData';
 import { Scene } from './Scene';
 import { CameraRig, type Insets } from './CameraRig';
 import type { HoverTarget } from './equipment';
 
-const PRESETS: { label: string; area: AreaId | null }[] = [
-  { label: 'Весь цех', area: null },
-  { label: 'Сварка', area: 'weld' },
-  { label: 'Окраска', area: 'paint' },
-  { label: 'Сборка', area: 'assembly' },
-  { label: 'ОТК', area: 'qc' },
-];
+/** Пресеты камеры: весь цех и каждый производственный участок */
+function presets(layout: PlantLayout): { label: string; area: AreaId | null }[] {
+  return [{ label: 'Весь цех', area: null }, ...layout.producing.map((id) => ({ label: layout.names[id]?.short ?? id, area: id }))];
+}
 
-const BUFFER_NAME: Record<string, string> = { 'weld-paint': 'Очередь перед окраской', 'paint-assembly': 'Очередь перед сборкой', 'assembly-qc': 'Очередь перед ОТК' };
+/** «Очередь перед окраской» */
+function bufferName(layout: PlantLayout, id: string): string {
+  const to = layout.bufferOrder.find((b) => b.id === id)?.to;
+  const short = to ? layout.names[to]?.short : undefined;
+  return short ? `Очередь перед ${inflectLower(short, 'ins')}` : 'Очередь';
+}
 
 export default function Plant3DView({ active, onLost }: { active: boolean; onLost: () => void }) {
   const snapshot = useLive((s) => s.snapshot);
@@ -33,9 +36,11 @@ export default function Plant3DView({ active, onLost }: { active: boolean; onLos
 }
 
 function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; active: boolean; onLost: () => void }) {
-  const layout = useMemo(buildLayout, []);
+  const model = usePlantModel();
+  const layout = useMemo(() => buildLayout(model), [model]);
   const palette = useMemo(readPalette, []);
-  const flow = useMemo(() => new FlowModel(layout), [layout]);
+  const flow = useMemo(() => new BodyFlow(layout), [layout]);
+  const bodies = useLive((x) => x.bodies);
   const data = useSceneData(s);
   const area = useView((v) => v.area);
   const equipment = useView((v) => v.equipment);
@@ -51,11 +56,11 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
   const labelsRef = useRef<HTMLDivElement>(null);
   const showFps = useMemo(() => new URLSearchParams(location.search).has('fps'), []);
 
-  // кузова: каждое обновление снимка доводит картинку до состояния данных
+  // кузова: каждое обновление трекера доводит картинку до состояния данных
   useEffect(() => {
-    flow.update(flowInput(s), performance.now(), reducedMotion);
+    flow.update(bodies, performance.now(), reducedMotion);
     invalidate();
-  }, [s, flow, reducedMotion]);
+  }, [bodies, flow, reducedMotion]);
 
   // Esc: сначала закрывается открытое окно (у него свой обработчик), потом — возврат к общему плану
   useEffect(() => {
@@ -161,7 +166,7 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
 
       {hover && (
         <div ref={tipRef} className="pointer-events-none absolute left-0 top-0 z-40 max-w-[18rem] rounded-xl bg-surface px-3 py-2 text-base shadow-pop ring-1 ring-line">
-          <TipContent hover={hover} data={data} snapshot={s} />
+          <TipContent hover={hover} data={data} snapshot={s} layout={layout} bodies={bodies} />
         </div>
       )}
 
@@ -195,7 +200,7 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
               Вернуться к цеху
             </button>
           )}
-          {PRESETS.map((p) => {
+          {presets(layout).map((p) => {
             const on = p.area === area && !equipment;
             return (
               <button
@@ -230,7 +235,11 @@ function Chip({ children, icon, tone }: { children: ReactNode; icon: ReactNode; 
 }
 
 /** Подсказка при наведении: название, статус, выпуск и главный показатель — те же, что в «Панели» */
-function TipContent({ hover, data, snapshot }: { hover: HoverTarget; data: SceneData; snapshot: LiveSnapshot }) {
+function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTarget; data: SceneData; snapshot: LiveSnapshot; layout: PlantLayout; bodies: BodyView[] }) {
+  if (hover.kind === 'body') {
+    const b = bodies.find((x) => x.bodyId === hover.id);
+    return b ? <BodyTip b={b} layout={layout} data={data} now={snapshot.now} /> : null;
+  }
   if (hover.kind === 'zone') {
     const r = data.rows[hover.id];
     if (!r) return null;
@@ -280,7 +289,7 @@ function TipContent({ hover, data, snapshot }: { hover: HoverTarget; data: Scene
     if (!b) return null;
     return (
       <div className="leading-snug">
-        <div className="font-semibold text-ink">{BUFFER_NAME[b.id] ?? 'Очередь'}</div>
+        <div className="font-semibold text-ink">{bufferName(layout, b.id)}</div>
         <div className="num text-ink-2">
           В очереди {b.count} {plural(b.count, BODIES)} из {b.capacity}
         </div>
@@ -308,23 +317,46 @@ function sceneSummary(data: SceneData): string {
   return `3D-модель цеха. ${bad.map((r) => `${r!.name}: ${r!.status.label.toLowerCase()}${r!.reason ? ` — ${r!.reason.text}` : ''}`).join('; ')}. Подробности — в режиме «Панель».`;
 }
 
-function flowInput(s: LiveSnapshot): FlowInput {
-  const by = new Map(s.areas.map((a) => [a.id, a]));
-  const buf = new Map(s.buffers.map((b) => [b.id, b.count]));
-  const status = {} as FlowInput['status'];
-  const done = {} as FlowInput['done'];
-  for (const a of PRODUCING) {
-    status[a] = by.get(a)?.status ?? 'idle';
-    done[a] = by.get(a)?.done ?? 0;
-  }
-  done.finished = by.get('finished')?.done ?? 0;
-  return {
-    runId: s.runId,
-    shiftKey: s.shift?.key ?? null,
-    status,
-    done,
-    buffers: { 'weld-paint': buf.get('weld-paint') ?? 0, 'paint-assembly': buf.get('paint-assembly') ?? 0, 'assembly-qc': buf.get('assembly-qc') ?? 0 },
-  };
+/** Подсказка кузова: модель и VIN, цвет из заказа, где он и сколько там против нормы */
+function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; data: SceneData; now: string }) {
+  const stage = layout.names[b.loc.stageId];
+  const eq = b.loc.equipmentId ? (data.equipment[b.loc.equipmentId]?.name ?? layout.equipment.find((e) => e.id === b.loc.equipmentId)?.name) : undefined;
+  const min = Math.max(0, Math.round((Date.parse(now) - Date.parse(b.since)) / 60_000));
+  const norm = b.normSec ? Math.max(1, Math.round(b.normSec / 60)) : null;
+  const delayed = b.flags.includes('delayed');
+  let where: string;
+  if (b.loc.kind === 'warehouse') where = 'Машинокомплект на складе, ждёт выдачи на сварку';
+  else if (b.loc.kind === 'finished') where = 'На складе готовой продукции';
+  else if (b.loc.kind === 'buffer') where = `В очереди после участка «${stage?.short ?? b.loc.stageId}»`;
+  else if (b.loc.precision === 'stage') where = `${stage?.short ?? b.loc.stageId} (точное место не отмечено${eq ? `, по норме времени — ${eq}` : ''})`;
+  else where = `${stage?.short ?? b.loc.stageId}${eq ? `, ${eq}` : ''}`;
+  return (
+    <div className="flex flex-col gap-1 leading-snug">
+      <div className="font-semibold text-ink">
+        {MODEL_BY_ID[b.model].name} · {b.vin ? `VIN …${b.vin.slice(-5)}` : `кузов ${b.bodyId}`}
+      </div>
+      <div className="flex items-center gap-1.5 text-ink-2">
+        {b.color ? (
+          <>
+            <span className="size-3 shrink-0 rounded-full ring-1 ring-line-strong" style={{ background: b.color.hex }} aria-hidden />
+            {b.color.name}
+          </>
+        ) : (
+          <span className="text-ink-3">Цвет не передан из 1С</span>
+        )}
+      </div>
+      <div className="text-ink-2">{where}</div>
+      <div className={cx('num', delayed ? cx('font-semibold', TONE_CLASS.attention.ink) : 'text-ink-2')}>
+        {min} мин{norm && b.loc.kind !== 'buffer' ? ` из ${norm} по норме` : b.loc.kind === 'buffer' ? ' в очереди' : ''}
+        {delayed ? ' · задерживается' : ''}
+      </div>
+      {(b.flags.includes('nonconformity') || b.flags.includes('rework') || b.flags.includes('restored_checkpoint')) && (
+        <div className="text-sm text-ink-3">
+          {[b.flags.includes('nonconformity') && 'есть несоответствие', b.flags.includes('rework') && 'повторный проход', b.flags.includes('restored_checkpoint') && 'часть отметок восстановлена по маршруту'].filter(Boolean).join(' · ')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Свободная от плавающих панелей часть сцены: элементы с data-occluder сверху, справа, снизу, слева */

@@ -1,0 +1,14 @@
+{
+  "eventId": "plc-20261007-op-77120",
+  "source": "plc",
+  "ts": "2026-10-07T13:52:10+05:00",
+  "area": "paint",
+  "equipmentId": "BOOTH-01",
+  "vin": "KZACN1S13TK004815",
+  "type": "operation_result",
+  "payload": {
+    "bodyId": "B-04815",
+    "operation": "basecoat",
+    "result": "ok"
+  }
+}

@@ -1,4 +1,5 @@
 // Шлюз двойника: REST и Swagger, MQTT-брокер, WebSocket для интерфейса, SQLite, ядро двойника.
+import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
-import { topics, type ServerMessage } from '@allur/contracts';
+import { SEED_PLANT, topics, type ServerMessage } from '@allur/contracts';
 import { config } from './config';
 import { Db } from './db';
 import { DemoClock } from './clock';
@@ -21,19 +22,32 @@ import { ingestRoutes } from './routes/ingest';
 import { twinRoutes } from './routes/twin';
 import { demoRoutes } from './routes/demo';
 import { viewRoutes } from './routes/views';
+import { plantRoutes, withRuntime } from './routes/plant';
+import { PlantStore } from './plant';
+import { ConnectionMonitor } from './connections';
 import type { Ctx } from './context';
 
 const log = (msg: string) => console.log(`[шлюз] ${msg}`);
 
 const db = new Db(config.dbPath);
+// Исходный состав цеха поменялся в коде: история и версии конфигурации собраны на старом —
+// очищаем, имитатор заново сгенерирует 30 дней истории по новому составу
+const seedHash = createHash('sha1').update(JSON.stringify(SEED_PLANT)).digest('hex').slice(0, 12);
+if (db.getSetting<string>('seedHash') !== seedHash) {
+  db.resetForNewSeed();
+  db.setSetting('seedHash', seedHash);
+  log('исходный состав цеха изменился — история и версии конфигурации будут собраны заново');
+}
 const clock = new DemoClock({ speed: config.startSpeed, seed: config.seed, stage: config.startStage });
 const sources = new SourceRegistry();
-const hub = new Hub(db, clock, sources);
+const plant = new PlantStore(db);
+const connections = new ConnectionMonitor();
+const hub = new Hub(db, clock, sources, () => plant.model, connections);
 const front = new FrontHub();
 // Старт демо всегда с начала сценария: живые события прошлого запуска не нужны
 db.clearLive();
 clock.start((process.env.START_SCENARIO as import('@allur/contracts').ScenarioId) ?? 'live_day');
-const twin = new TwinService(db, clock);
+const twin = new TwinService(db, clock, plant.config);
 hub.addSink(twin);
 
 let broker: MqttBroker | null = null;
@@ -45,8 +59,12 @@ const ctx: Ctx = {
   sources,
   twin,
   front,
+  plant,
+  connections,
   mqtt: () => broker,
   resetRun(scenario) {
+    // демо всегда стартует с исходного состава цеха; правки редактора остаются в истории версий
+    plant.ensureBase(SEED_PLANT, 'Демо: исходный состав цеха');
     clock.reset({ scenario });
     db.clearLive();
     twin.reset(clock.runStartMs);
@@ -54,6 +72,14 @@ const ctx: Ctx = {
     log(`сброс: прогон ${clock.runId}, сценарий ${clock.scenario}`);
   },
 };
+
+// plant_config_changed: ядро перестраивается, интерфейс и имитаторы получают новую версию
+plant.onChange((cfg, changes) => {
+  twin.setPlant(cfg);
+  front.broadcast({ t: 'plant', config: withRuntime(ctx, cfg) });
+  publishPlant();
+  log(`конфигурация завода: версия ${cfg.version}${changes.length ? ` (${changes.slice(0, 3).join('; ')})` : ''}`);
+});
 
 const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 10 * 1024 * 1024 });
 
@@ -79,6 +105,9 @@ app.get('/ws', { websocket: true }, (socket) => {
   initial.push(snap ? { t: 'snapshot', data: snap } : { t: 'booting', message: 'Запускаем двойник…' });
   initial.push({ t: 'feed', items: hub.recentFeed(60) });
   initial.push({ t: 'sources', items: sources.status(clock.stage) });
+  initial.push({ t: 'plant', config: withRuntime(ctx, plant.config) });
+  initial.push({ t: 'connections', items: connections.status(plant.model, clock.stage, clock.simulateAll) });
+  initial.push({ t: 'bodies', at: new Date(clock.now()).toISOString(), items: twin.bodies(clock.now()) });
   front.add(socket, initial);
 });
 
@@ -94,6 +123,7 @@ ingestRoutes(app, ctx);
 twinRoutes(app, ctx);
 demoRoutes(app, ctx);
 viewRoutes(app, ctx);
+plantRoutes(app, ctx);
 
 // Видео с постов: настоящий ролик — файл data/media/clips/<имя>.mp4; пока его нет — честная заглушка
 app.get<{ Params: { name: string } }>('/media/clips/:name', async (req, reply) => {
@@ -128,7 +158,8 @@ if (hasWeb) {
 }
 
 await app.listen({ port: config.port, host: config.host });
-broker = await startMqtt({ port: config.mqttPort, hub, clock, sources, log });
+broker = await startMqtt({ port: config.mqttPort, hub, clock, sources, connections, log });
+publishPlant();
 log(`HTTP :${config.port} (REST /api/v1, Swagger /docs, WebSocket /ws, MQTT поверх WS /mqtt)`);
 log(`MQTT TCP: ${broker.tcpListening ? `:${config.mqttPort}` : 'нет'}; база: ${config.dbPath}`);
 log(`часы: старт ${new Date(clock.now()).toISOString()}, ×${clock.speed}, ступень ${clock.stage}`);
@@ -153,6 +184,11 @@ function publishClock() {
   broker?.publish(topics.demoClock, clock.message(), { retain: true });
 }
 
+/** Имитаторам и интеграторам: применена версия конфигурации завода (за подробностями — GET /api/v1/plant/config) */
+function publishPlant() {
+  broker?.publish(topics.plantConfig, { version: plant.config.version, updatedAt: plant.config.updatedAt }, { retain: true, qos: 1 });
+}
+
 // Основной цикл: часы → ядро → рассылка интерфейсу и имитаторам
 let lastSources = 0;
 const loop = setInterval(() => {
@@ -168,6 +204,8 @@ const loop = setInterval(() => {
     if (Date.now() - lastSources > 1000) {
       lastSources = Date.now();
       front.broadcast({ t: 'sources', items: sources.status(clock.stage) });
+      front.broadcast({ t: 'connections', items: connections.status(plant.model, clock.stage, clock.simulateAll) });
+      front.broadcast({ t: 'bodies', at: new Date(now).toISOString(), items: twin.bodies(now) });
     }
   } else {
     hub.drainFeed();

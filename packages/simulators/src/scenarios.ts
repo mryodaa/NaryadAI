@@ -24,9 +24,21 @@ const base = (seed: number, scenario: ScenarioId): WorldPreset => ({
   seed: hashSeed(seed, scenario),
   randomFailures: true,
   microStops: true,
-  filterB2Bodies: filterBodiesFor('12:30'),
-  filterB1Bodies: 260,
-  robotCycles: { 'ABB-01': 2310, 'ABB-02': 3980, 'ABB-03': 1120, 'ABB-04': 5560 },
+  filterBodies: { 'BOOTH-02': filterBodiesFor('12:30'), 'BOOTH-01': 260 },
+  robotCycles: {
+    'ABB-01': 2310,
+    'ABB-02': 3980,
+    'ABB-03': 1120,
+    'ABB-04': 5560,
+    'ABB-05': 2870,
+    'ABB-06': 4410,
+    'ABB-07': 1650,
+    'ABB-08': 3120,
+    'ABB-09': 980,
+    'ABB-10': 2240,
+    'ABB-11': 3560,
+    'LASER-01': 7400,
+  },
   buffers: { ...CAL.initialBuffers },
   kitShifts: {
     'KIT-ONIX-HARNESS': 3.6,
@@ -56,15 +68,16 @@ export function setupScenario(id: ScenarioId, seed: number): ScenarioSetup {
     case 'normal':
       // Всё в пределах нормы: свежий фильтр, ABB-04 обслужен ночью, без крупных отказов
       return {
-        preset: { ...p, randomFailures: false, filterB2Bodies: 20, robotCycles: { ...p.robotCycles, 'ABB-04': 0 } },
+        preset: { ...p, randomFailures: false, filterBodies: { ...p.filterBodies, 'BOOTH-02': 20 }, robotCycles: { ...p.robotCycles, 'ABB-04': 0 } },
         preStart: [{ kind: 'robot_serviced', equipmentId: 'ABB-04', from: at('05:30'), to: at('06:00') }],
       };
 
     case 'paint_filter':
-      // Перепад переходит 300 Па около 12:10 — к старту показа (13:30) брак окраски уже растёт,
-      // а предел (450 Па) наступит после 16:00, так что фильтр успевают заменить в пересменку
+      // Перепад переходит 300 Па около 11:40 — к старту показа (13:30) брак окраски уже растёт
+      // (контроль покрытия — после сушки, брак виден через ~10 минут после камеры), а предел
+      // (450 Па) наступит после 16:00, так что фильтр успевают заменить в пересменку
       return {
-        preset: { ...p, randomFailures: false, filterB2Bodies: filterBodiesFor('12:10'), kitShifts: { ...p.kitShifts, 'KIT-J7-HARNESS': 3.6 } },
+        preset: { ...p, randomFailures: false, filterBodies: { ...p.filterBodies, 'BOOTH-02': filterBodiesFor('11:40') }, kitShifts: { ...p.kitShifts, 'KIT-J7-HARNESS': 3.6 } },
         preStart: [],
       };
 
@@ -74,9 +87,9 @@ export function setupScenario(id: ScenarioId, seed: number): ScenarioSetup {
         preset: {
           ...p,
           randomFailures: false,
-          filterB2Bodies: 60,
+          filterBodies: { ...p.filterBodies, 'BOOTH-02': 60 },
           buffers: { 'weld-paint': 7, 'paint-assembly': 12, 'assembly-qc': 3 },
-          chainBreakAt: at('10:05'),
+          chainBreakAt: { 'CONV-03': at('10:05') },
         },
         preStart: [],
       };
@@ -87,7 +100,7 @@ export function setupScenario(id: ScenarioId, seed: number): ScenarioSetup {
         preset: {
           ...p,
           randomFailures: false,
-          filterB2Bodies: 60,
+          filterBodies: { ...p.filterBodies, 'BOOTH-02': 60 },
           kitShifts: { ...p.kitShifts, 'KIT-J7-HARNESS': 1.75 },
           delayedDeliveries: [{ kitId: 'KIT-J7-HARNESS', untilMs: at('07:00') + 30 * 60 * MIN }],
         },
@@ -97,7 +110,7 @@ export function setupScenario(id: ScenarioId, seed: number): ScenarioSetup {
     case 'abb04_service':
       // ABB-04 почти выработал межсервисный интервал
       return {
-        preset: { ...p, randomFailures: false, filterB2Bodies: 60, robotCycles: { ...p.robotCycles, 'ABB-04': 5795 } },
+        preset: { ...p, randomFailures: false, filterBodies: { ...p.filterBodies, 'BOOTH-02': 60 }, robotCycles: { ...p.robotCycles, 'ABB-04': 5795 } },
         preStart: [],
       };
   }

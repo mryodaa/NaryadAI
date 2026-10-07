@@ -1,6 +1,7 @@
 // Верхняя полоса: ровно 4 показателя, каждый сравнивается с нормой или планом.
 import { CircleCheck, TrendingDown, TriangleAlert } from 'lucide-react';
-import { AREA_BY_ID, type LiveSnapshot } from '@allur/contracts/ref';
+import type { LiveSnapshot } from '@allur/contracts/ref';
+import { stageShort, usePlantModel } from '../../state/plant';
 import { Card, WhyButton } from '../../components/ui';
 import { num, pct0, pct1, signed, timeHM } from '../../lib/format';
 import { cx } from '../../lib/tones';
@@ -101,6 +102,7 @@ function OeeTile({ oee }: { oee: Kpi['oee'] }) {
 
 function DefectsTile({ d }: { d: Kpi['defects'] }) {
   // Норма 2% — на каждый участок, поэтому главное число — худший участок смены
+  const model = usePlantModel();
   const worst = d.worst && d.worst.pct > 0 ? d.worst : null;
   const value = worst ? worst.pct : d.pct;
   const high = value > d.norm;
@@ -109,7 +111,7 @@ function DefectsTile({ d }: { d: Kpi['defects'] }) {
       <TileLabel>Брак за смену</TileLabel>
       <ValueVsNorm
         value={pct1(value)}
-        norm={worst ? `${AREA_BY_ID[worst.area].short.toLowerCase()} · норма ${pct0(d.norm)}` : `норма ${pct0(d.norm)}`}
+        norm={worst ? `${stageShort(model, worst.area).toLowerCase()} · норма ${pct0(d.norm)}` : `норма ${pct0(d.norm)}`}
         bad={high}
         badWord="выше нормы"
       />

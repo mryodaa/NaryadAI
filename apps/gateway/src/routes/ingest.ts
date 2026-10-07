@@ -67,7 +67,7 @@ export function ingestRoutes(app: FastifyInstance, ctx: Ctx) {
     const source = sourceParam(req.query) ?? 'mes';
     const rows = parse(ShiftReportRequest, req.body, reply, channel, source);
     if (!rows) return reply;
-    const { events, issues } = shiftReportRowsToEvents(rows, source, clock.now());
+    const { events, issues } = shiftReportRowsToEvents(rows, source, clock.now(), ctx.plant.model);
     for (const i of issues) hub.reject(channel, source, [i], rows[i.row]);
     return { ...hub.ingest(events, channel), rowIssues: issues };
   });
@@ -77,7 +77,7 @@ export function ingestRoutes(app: FastifyInstance, ctx: Ctx) {
     const source = sourceParam(req.query) ?? 'qls';
     const rows = parse(QualityRequest, req.body, reply, channel, source);
     if (!rows) return reply;
-    const { events, issues } = qualityRowsToEvents(rows, source, clock.now());
+    const { events, issues } = qualityRowsToEvents(rows, source, clock.now(), ctx.plant.model);
     for (const i of issues) hub.reject(channel, source, [i], rows[i.row]);
     return { ...hub.ingest(events, channel), rowIssues: issues };
   });
@@ -86,7 +86,7 @@ export function ingestRoutes(app: FastifyInstance, ctx: Ctx) {
     const channel = 'POST /api/v1/import/csv';
     const text = typeof req.body === 'string' ? req.body : '';
     if (!text.trim()) return fail(reply, channel, 'import', [{ path: 'файл', message: 'Пустой файл' }], '');
-    const parsed = parseCsvTable(text, clock.now());
+    const parsed = parseCsvTable(text, clock.now(), '2026-10', ctx.plant.model);
     for (const i of parsed.issues) hub.reject(channel, 'import', [i], `строка ${i.row}`);
     const result = hub.ingest(parsed.events, channel);
     return {

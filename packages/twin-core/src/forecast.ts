@@ -5,16 +5,20 @@ import {
   MODELS,
   addDays,
   freeSaturdays,
+  inflect,
   monthOf,
   monthShifts,
   plantParts,
   shiftsBetweenDates,
   type AreaId,
   type ModelId,
+  type PlantStage,
   type ShiftRef,
 } from '@allur/contracts';
 import type { Explain } from '@allur/contracts';
 import type { TwinConfig } from './config';
+import { plantCapacity, type PlantCapacityView } from './capacity';
+import { filterBooths, outputStage } from './plant';
 import { Rng } from './rng';
 import type { TwinState } from './state';
 import { num, num1 } from './text';
@@ -90,16 +94,18 @@ export interface MonthForecast {
   levers: LeverInfo[];
   models: ModelForecast[];
   capacityNote: string;
+  /** Пропускная способность участков по составу цеха и узкое место по ней */
+  capacity: PlantCapacityView;
   explain: Explain;
 }
 
-const AREA_LABEL: Record<string, string> = { weld: 'Сварка', paint: 'Окраска', assembly: 'Сборка', qc: 'ОТК' };
-
 /** Выпуск завода за смену: факт «Сборка-1» из сменного отчёта, а для идущего дня — по проходу VIN */
 export function shiftOutput(state: TwinState, s: ShiftRef, now: number): number | null {
-  const rep = state.reports.get(`${s.date}#${s.index}|assembly`);
+  const out = outputStage(state.plant);
+  if (!out) return null;
+  const rep = state.reports.get(`${s.date}#${s.index}|${out.id}`);
   if (rep) return rep.fact;
-  if (s.startMs >= state.runStartMs - 60_000 && s.startMs <= now) return state.count(s.key, 'ASM-6');
+  if (s.startMs >= state.runStartMs - 60_000 && s.startMs <= now) return state.stageDone(s.key, out.id);
   return null;
 }
 
@@ -124,7 +130,8 @@ export function monthForecast(state: TwinState, now: number, cfg: TwinConfig, op
     } else if (s.startMs <= now) current = s;
     else remaining.push(s);
   }
-  const currentDone = current ? state.count(current.key, 'ASM-6') : 0;
+  const out = outputStage(state.plant);
+  const currentDone = current && out ? state.stageDone(current.key, out.id) : 0;
   const produced = done.reduce((a, d) => a + d.out, 0) + currentDone;
 
   // Темп: последние 10 завершённых смен (включая сентябрь)
@@ -205,7 +212,7 @@ export function monthForecast(state: TwinState, now: number, cfg: TwinConfig, op
   const losses = lossDecomposition(state, now, cfg, done.map((d) => d.s), current);
   const top = losses.filter((l) => l.area).sort((a, b) => b.cars - a.cars)[0];
   const bottleneck = top?.area
-    ? { area: top.area, label: AREA_LABEL[top.area] ?? top.area, reason: `больше всего потерянных машин с начала месяца: ${num(top.cars)}` }
+    ? { area: top.area, label: state.plant.stageById.get(top.area)?.short ?? top.area, reason: `больше всего потерянных машин с начала месяца: ${num(top.cars)}` }
     : null;
 
   const capacity = shifts.length * cfg.shiftPlan;
@@ -248,6 +255,7 @@ export function monthForecast(state: TwinState, now: number, cfg: TwinConfig, op
     levers: leverInfo,
     models: modelForecasts(state, target, produced, p50, month, now),
     capacityNote,
+    capacity: plantCapacity(state, now, cfg),
     explain,
   };
 }
@@ -269,9 +277,10 @@ function lossDecomposition(state: TwinState, now: number, cfg: TwinConfig, doneS
   if (!shifts.length) return [];
   let gap = 0;
   for (const s of doneShifts) gap += Math.max(0, cfg.shiftPlan - (shiftOutput(state, s, now) ?? cfg.shiftPlan));
+  const out = outputStage(state.plant);
   if (current) {
     const elapsed = Math.max(0, Math.min(now, current.endMs) - current.startMs) / 60_000;
-    gap += Math.max(0, Math.floor(elapsed / cfg.taktMin) - state.count(current.key, 'ASM-6'));
+    gap += Math.max(0, Math.floor(elapsed / cfg.taktMin) - (out ? state.stageDone(current.key, out.id) : 0));
   }
   const inShift = (t: number) => shifts.some((s) => t >= s.startMs && t < s.endMs);
   const mins: Record<string, number> = {};
@@ -283,15 +292,23 @@ function lossDecomposition(state: TwinState, now: number, cfg: TwinConfig, doneS
     mins[key] = (mins[key] ?? 0) + m;
   }
   // Повторная окраска забирает мощность окраски: один перекрашенный кузов ≈ одна машина
-  let repaints = 0;
-  for (const s of doneShifts) repaints += state.quality.get(`${s.date}#${s.index}|paint`)?.defects ?? 0;
-  if (current) for (const n of state.nc) if (n.responsible === 'paint' && n.decision === 'repaint' && n.ts >= current.startMs && n.ts <= now) repaints += n.count;
+  const repaintsOf = (stageId: string) => {
+    let repaints = 0;
+    for (const s of doneShifts) repaints += state.quality.get(`${s.date}#${s.index}|${stageId}`)?.defects ?? 0;
+    if (current) for (const n of state.nc) if (n.responsible === stageId && n.decision === 'repaint' && n.ts >= current.startMs && n.ts <= now) repaints += n.count;
+    return repaints;
+  };
 
   const raw: LossItem[] = [
-    { key: 'paint', label: 'Окраска: простои и перекраска', cars: (mins.paint ?? 0) / cfg.taktMin + repaints, area: 'paint' },
-    { key: 'assembly', label: 'Сборка: простои', cars: (mins.assembly ?? 0) / cfg.taktMin, area: 'assembly' },
-    { key: 'weld', label: 'Сварка: простои', cars: (mins.weld ?? 0) / cfg.taktMin, area: 'weld' },
-    { key: 'qc', label: 'ОТК: простои', cars: (mins.qc ?? 0) / cfg.taktMin, area: 'qc' },
+    ...lossOrder(state.plant.production).map((st): LossItem => {
+      const painting = st.kind === 'painting';
+      return {
+        key: st.id,
+        label: `${st.short}: ${painting ? 'простои и перекраска' : 'простои'}`,
+        cars: (mins[st.id] ?? 0) / cfg.taktMin + (painting ? repaintsOf(st.id) : 0),
+        area: st.id,
+      };
+    }),
     { key: 'planned', label: 'Плановое ТО в рабочее время', cars: (mins.planned ?? 0) / cfg.taktMin },
     { key: 'no_parts', label: 'Нехватка комплектующих', cars: (mins.no_parts ?? 0) / cfg.taktMin },
   ];
@@ -304,9 +321,18 @@ function lossDecomposition(state: TwinState, now: number, cfg: TwinConfig, doneS
   return items.filter((i) => i.cars > 0).sort((a, b) => b.cars - a.cars);
 }
 
+/** Порядок строк разложения потерь: окраска, сборка, сварка, ОТК, остальные — как на экране «План» */
+function lossOrder(stages: PlantStage[]): PlantStage[] {
+  const rank = (k: string) => ['painting', 'assembly', 'welding', 'inspection'].indexOf(k);
+  return [...stages].sort((a, b) => (rank(a.kind) < 0 ? 9 : rank(a.kind)) - (rank(b.kind) < 0 ? 9 : rank(b.kind)) || a.index - b.index);
+}
+
 function leverGains(state: TwinState, now: number, cfg: TwinConfig, remainingShifts: number, pace: number, month: string): LeverInfo[] {
   // Статистика за последние 30 дней
   const from = now - 30 * 86_400_000;
+  const booths = filterBooths(state.plant);
+  const boothIds = new Set(booths.map((b) => b.id));
+  const forcedBy = new Map<string, number>();
   let plannedMin = 0;
   let forced = 0;
   for (const d of state.downtimes.values()) {
@@ -315,13 +341,23 @@ function leverGains(state: TwinState, now: number, cfg: TwinConfig, remainingShi
     const h = plantParts(d.from).hour;
     const inShift = h >= 8;
     if (d.category === 'planned' && inShift) plannedMin += (end - d.from) / 60_000;
-    if (d.equipmentId === 'BOOTH-02' && /фильтр/i.test(d.reason) && d.category !== 'planned') forced++;
+    if (boothIds.has(d.equipmentId) && /фильтр/i.test(d.reason) && d.category !== 'planned') {
+      forced++;
+      forcedBy.set(d.equipmentId, (forcedBy.get(d.equipmentId) ?? 0) + 1);
+    }
   }
+  // «фильтра Камеры-02» — если вынужденно меняли одну камеру; несколько — «фильтров камер окраски»
+  const forcedBooths = [...forcedBy.keys()];
+  const whose =
+    forcedBooths.length > 1
+      ? 'фильтров камер окраски'
+      : `фильтра ${inflect(state.plant.equipmentById.get(forcedBooths[0] ?? booths[0]?.id ?? '')?.name ?? 'камеры окраски', 'gen')}`;
   const histShifts = Math.max(1, recentShiftOutputs(state, now, 60).length);
+  const paintIds = new Set(state.plant.production.filter((st) => st.kind === 'painting').map((st) => st.id));
   let paintDefects = 0;
   let paintProduced = 0;
   for (const q of state.quality.values()) {
-    if (q.area !== 'paint') continue;
+    if (!paintIds.has(q.area)) continue;
     paintDefects += q.defects;
     paintProduced += q.produced;
   }
@@ -346,7 +382,7 @@ function leverGains(state: TwinState, now: number, cfg: TwinConfig, remainingShi
       label: 'Менять фильтр окраски по графику, а не по аварии',
       perShift: filterPerShift,
       gain: filterPerShift * remainingShifts,
-      explain: `За 30 дней ${forced} вынужденных замен фильтра Камеры-02 по ${cfg.filter.forcedMin} мин; буфер гасит около ${Math.round(cfg.bufferAbsorption * 100)}% остановки. Брак окраски ${num1(paintRate * 100)}% против ~1,5% при чистом фильтре — меньше перекраски.`,
+      explain: `За 30 дней ${forced} вынужденных замен ${whose} по ${cfg.filter.forcedMin} мин; буфер гасит около ${Math.round(cfg.bufferAbsorption * 100)}% остановки. Брак окраски ${num1(paintRate * 100)}% против ~1,5% при чистом фильтре — меньше перекраски.`,
     },
     {
       id: 'saturdayShifts',
@@ -364,8 +400,9 @@ function modelForecasts(state: TwinState, target: number, produced: number, p50:
   const givenTotal = plan ? plan.models.reduce((a, m) => a + m.qty, 0) : 4800;
   const live: Record<ModelId, number> = { onix: 0, cobalt: 0, j7: 0 };
   let liveTotal = 0;
+  const out = outputStage(state.plant)?.id;
   for (const p of state.passes) {
-    if (p.post !== 'ASM-6' || monthOf(plantParts(p.ts).date) !== month) continue;
+    if (p.kind !== 'exit' || p.area !== out || monthOf(plantParts(p.ts).date) !== month) continue;
     live[p.model]++;
     liveTotal++;
   }

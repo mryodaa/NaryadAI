@@ -1,6 +1,6 @@
 // Данные для экранов: панель участка, оборудование, параметры денег и допущения.
 import type { FastifyInstance } from 'fastify';
-import { AREA_IDS, type AreaId } from '@allur/contracts';
+import type { AreaId } from '@allur/contracts';
 import { ASSUMPTIONS, DEFAULT_MONEY, MONEY_LABELS, type MoneyParams } from '@allur/twin-core';
 import type { Ctx } from '../context';
 
@@ -9,7 +9,7 @@ export function viewRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.get<{ Params: { id: string } }>('/api/v1/areas/:id', async (req, reply) => {
     const id = req.params.id as AreaId;
-    if (!(AREA_IDS as readonly string[]).includes(id)) return reply.code(404).send({ error: 'not_found', message: 'Участок не найден' });
+    if (!ctx.plant.model.stageById.has(id)) return reply.code(404).send({ error: 'not_found', message: 'Участок не найден в конфигурации завода' });
     return twin.areaDetail(id, clock.now());
   });
 

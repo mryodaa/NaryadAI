@@ -17,8 +17,25 @@ export const DemoClock = z
     paused: z.boolean(),
     stage: StageSchema,
     scenario: z.enum(SCENARIO_IDS),
+    simulateAll: z.boolean().optional().meta({ description: 'Имитировать всё оборудование с выбранным способом подключения, как будто шлюз завода работает' }),
   })
   .meta({ id: 'DemoClock', description: 'Часы демонстрации (только для имитаторов, не часть контракта интеграции)' });
+
+export const SimProbeRequest = z
+  .object({ requestId: z.string().min(1).max(64), equipmentId: z.string().min(1).max(64) })
+  .meta({ id: 'SimProbeRequest', description: 'Опрос имитатора при проверке подключения (только демо)' });
+
+export const SimProbeReply = z
+  .object({
+    requestId: z.string(),
+    ok: z.boolean(),
+    message: z.string().optional(),
+    values: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  })
+  .meta({ id: 'SimProbeReply', description: 'Ответ имитатора: текущие значения полей оборудования' });
+
+export type SimProbeRequest = z.infer<typeof SimProbeRequest>;
+export type SimProbeReply = z.infer<typeof SimProbeReply>;
 
 export type DemoClock = z.infer<typeof DemoClock>;
 

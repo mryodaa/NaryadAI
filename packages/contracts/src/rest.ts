@@ -13,6 +13,7 @@ import {
   type ValidationIssue,
 } from './events';
 import { areaFromLineName, areaFromName, SOURCE_IDS } from './plant';
+import { SEED_MODEL, stageFromLineName, stageFromName, type PlantModel } from './plant-model';
 import { normalizeDate, toPlantIso } from './time';
 
 export const EventBatch = z.array(CanonicalEvent).min(1).max(1000).meta({
@@ -157,11 +158,22 @@ export interface RowsResult {
   issues: (ValidationIssue & { row: number })[];
 }
 
-export function shiftReportRowsToEvents(rows: ShiftReportRow[], source: Source, nowMs: number): RowsResult {
+/** Участок по названию из таблицы: сначала по конфигурации завода, затем по синонимам исходного цеха */
+export function areaOfLine(model: PlantModel, line: string): string | undefined {
+  const legacy = areaFromLineName(line);
+  return stageFromLineName(model, line)?.id ?? (legacy && model.stageById.has(legacy) ? legacy : undefined);
+}
+
+export function areaOfName(model: PlantModel, name: string): string | undefined {
+  const legacy = areaFromName(name);
+  return stageFromName(model, name)?.id ?? (legacy && model.stageById.has(legacy) ? legacy : undefined);
+}
+
+export function shiftReportRowsToEvents(rows: ShiftReportRow[], source: Source, nowMs: number, model: PlantModel = SEED_MODEL): RowsResult {
   const out: RowsResult = { events: [], issues: [] };
   rows.forEach((r, row) => {
     const date = normalizeDate(r.date);
-    const area = areaFromLineName(r.line);
+    const area = areaOfLine(model, r.line);
     if (!date) return out.issues.push({ row, path: 'date', message: `Не понял дату «${r.date}»` });
     if (!area) return out.issues.push({ row, path: 'line', message: `Не понял линию «${r.line}»` });
     out.events.push({
@@ -176,11 +188,11 @@ export function shiftReportRowsToEvents(rows: ShiftReportRow[], source: Source, 
   return out;
 }
 
-export function qualityRowsToEvents(rows: QualityRow[], source: Source, nowMs: number): RowsResult {
+export function qualityRowsToEvents(rows: QualityRow[], source: Source, nowMs: number, model: PlantModel = SEED_MODEL): RowsResult {
   const out: RowsResult = { events: [], issues: [] };
   rows.forEach((r, row) => {
     const date = normalizeDate(r.date);
-    const area = areaFromName(r.area);
+    const area = areaOfName(model, r.area);
     if (!date) return out.issues.push({ row, path: 'date', message: `Не понял дату «${r.date}»` });
     if (!area) return out.issues.push({ row, path: 'area', message: `Не понял участок «${r.area}»` });
     const pct = r.pct ?? (r.produced > 0 ? Math.round((r.defects / r.produced) * 1000) / 10 : 0);

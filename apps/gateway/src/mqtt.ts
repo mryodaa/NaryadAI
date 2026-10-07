@@ -5,9 +5,10 @@ import type { IncomingMessage } from 'node:http';
 import type { Readable } from 'node:stream';
 import { Aedes } from 'aedes';
 import { createWebSocketStream, type WebSocket } from 'ws';
-import { mqttToEvent, parseTopic, TOPIC_ROOT, type SourceId } from '@allur/contracts';
+import { SIM_TOPIC_PREFIX, SimProbeReply, mqttToEvent, parseTopic, TOPIC_ROOT, type SourceId } from '@allur/contracts';
 import type { Hub } from './hub';
 import type { DemoClock } from './clock';
+import type { ConnectionMonitor } from './connections';
 import { sourceFromClientId, type SourceRegistry } from './sources';
 
 /** Эти топики публикует только сам шлюз */
@@ -25,9 +26,10 @@ export async function startMqtt(opts: {
   hub: Hub;
   clock: DemoClock;
   sources: SourceRegistry;
+  connections: ConnectionMonitor;
   log: (msg: string) => void;
 }): Promise<MqttBroker> {
-  const { hub, clock, sources, log } = opts;
+  const { hub, clock, sources, connections, log } = opts;
   const aedes = await Aedes.createBroker({ drainTimeout: 30_000 });
 
   aedes.authorizePublish = (client, packet, cb) => {
@@ -49,6 +51,22 @@ export async function startMqtt(opts: {
     const topic = packet.topic;
     if (!topic.startsWith(`${TOPIC_ROOT}/`) || GATEWAY_ONLY.some((p) => topic.startsWith(p))) return;
     const raw = typeof packet.payload === 'string' ? packet.payload : packet.payload.toString('utf8');
+    // служебное: ответ имитатора на проверку подключения
+    if (topic.startsWith(SIM_TOPIC_PREFIX)) {
+      try {
+        const r = SimProbeReply.safeParse(JSON.parse(raw));
+        if (r.success) connections.onProbeReply(r.data);
+      } catch {
+        // не JSON — игнорируем
+      }
+      return;
+    }
+    const parsed = parseTopic(topic);
+    // пульс связи: оборудование на связи, событием цеха не становится
+    if (parsed?.kind === 'heartbeat') {
+      connections.seen(parsed.equipmentId);
+      return;
+    }
     const channel = `MQTT ${topic}`;
     const r = mqttToEvent(topic, raw, clock.now());
     if (r.ok) hub.ingest([r.event], channel);

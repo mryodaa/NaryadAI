@@ -2,17 +2,11 @@
 // Отправка идёт в тот же REST шлюза, что и у 1С.
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Check, Cog, PackageX, Settings2, Hourglass, CircleHelp, Wrench, TriangleAlert } from 'lucide-react';
-import { EQUIPMENT, type AreaId } from '@allur/contracts/ref';
+import type { AreaId, StageKind } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import { useLive } from '../../state/live';
+import { usePlant, usePlantModel } from '../../state/plant';
 import { cx } from '../../lib/tones';
-
-const AREAS: { id: AreaId; name: string }[] = [
-  { id: 'weld', name: 'Сварка' },
-  { id: 'paint', name: 'Окраска' },
-  { id: 'assembly', name: 'Сборка' },
-  { id: 'qc', name: 'ОТК' },
-];
 
 const REASONS = [
   { id: 'breakdown', label: 'Поломка', icon: Wrench },
@@ -22,12 +16,13 @@ const REASONS = [
   { id: 'other', label: 'Другое', icon: CircleHelp },
 ] as const;
 
-const DEFECTS: Record<string, { id: string; label: string }[]> = {
-  weld: [
+/** Дефекты, которые мастер отмечает на участке — по виду участка */
+const DEFECTS: Partial<Record<StageKind, { id: string; label: string }[]>> = {
+  welding: [
     { id: 'weld_geometry', label: 'Геометрия кузова' },
     { id: 'weld_spot', label: 'Непровар точки' },
   ],
-  paint: [
+  painting: [
     { id: 'paint_dirt', label: 'Сорность' },
     { id: 'paint_run', label: 'Потёки' },
     { id: 'paint_thin', label: 'Непрокрас' },
@@ -37,7 +32,7 @@ const DEFECTS: Record<string, { id: string; label: string }[]> = {
     { id: 'asm_torque', label: 'Не дотянуто' },
     { id: 'asm_electric', label: 'Электрика' },
   ],
-  qc: [
+  inspection: [
     { id: 'asm_leak', label: 'Протечка' },
     { id: 'asm_gap', label: 'Зазоры' },
     { id: 'asm_electric', label: 'Электрика' },
@@ -47,22 +42,28 @@ const DEFECTS: Record<string, { id: string; label: string }[]> = {
 type Step = 'home' | 'downtime' | 'defect' | 'sent';
 
 function loadArea(): AreaId {
+  const production = usePlant.getState().model.production;
   try {
     const v = localStorage.getItem('master-area');
-    if (v && AREAS.some((a) => a.id === v)) return v as AreaId;
+    if (v && production.some((a) => a.id === v)) return v as AreaId;
   } catch {
     /* хранилище недоступно — участок по умолчанию */
   }
-  return 'assembly';
+  return production.find((a) => a.kind === 'assembly')?.id ?? production[0]?.id ?? 'assembly';
 }
 
 export function MasterScreen() {
+  const model = usePlantModel();
+  // участки мастера — производственные участки из конфигурации завода
+  const AREAS = model.production.map((s) => ({ id: s.id, name: s.short, kind: s.kind }));
   const [area, setArea] = useState<AreaId>(loadArea);
   const [step, setStep] = useState<Step>('home');
   const [eq, setEq] = useState<string>('');
   const [sent, setSent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  const equipment = EQUIPMENT.filter((e) => e.area === area);
+  const stage = model.stageById.get(area);
+  const kind = stage?.kind ?? 'custom';
+  const equipment = (stage?.equipment ?? []).filter((e) => !e.passive);
 
   useEffect(() => {
     try {
@@ -86,7 +87,7 @@ export function MasterScreen() {
         method: 'POST',
         json: { source: 'master', area, equipmentId: eq, reason: label, category: reasonId, registeredBy: `Мастер участка «${AREAS.find((a) => a.id === area)!.name}»` },
       });
-      setSent(`Простой: ${label.toLowerCase()} · ${EQUIPMENT.find((e) => e.id === eq)?.name ?? ''}`);
+      setSent(`Простой: ${label.toLowerCase()} · ${model.equipmentById.get(eq)?.name ?? ''}`);
       setStep('sent');
     } catch (e) {
       setError((e as Error).message);
@@ -105,13 +106,14 @@ export function MasterScreen() {
             eventId: `master-nc-${crypto.randomUUID()}`,
             source: 'master',
             ts: now,
-            area: area === 'qc' ? 'qc' : area,
+            area,
             type: 'nonconformity',
             payload: {
-              checkpoint: area === 'weld' ? 'CP-WELD' : area === 'paint' ? 'CP-PAINT' : 'CP-FINAL',
+              checkpoint: kind === 'welding' ? 'CP-WELD' : kind === 'painting' ? 'CP-PAINT' : 'CP-FINAL',
               defect,
-              decision: area === 'paint' ? 'repaint' : 'rework',
-              responsibleArea: area === 'qc' ? 'assembly' : area,
+              decision: kind === 'painting' ? 'repaint' : 'rework',
+              // брак, найденный на контроле, — на совести сборки
+              responsibleArea: kind === 'inspection' ? (model.production.find((s) => s.kind === 'assembly')?.id ?? area) : area,
               count: 1,
             },
           },
@@ -219,7 +221,7 @@ export function MasterScreen() {
         <>
           <div className="mb-1.5 text-base text-ink-2">Что за брак — нажмите, и сообщение отправится</div>
           <div className="grid grid-cols-2 gap-3">
-            {[...(DEFECTS[area] ?? []), { id: 'other', label: 'Другое' }].map((d) => (
+            {[...(DEFECTS[kind] ?? []), { id: 'other', label: 'Другое' }].map((d) => (
               <button
                 key={d.id}
                 type="button"

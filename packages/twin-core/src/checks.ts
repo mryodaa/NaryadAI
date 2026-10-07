@@ -1,6 +1,6 @@
 // Проверка данных на противоречия — часть ценности двойника, а не баг.
 // Показывается на экране «Источники данных» и в ответе на импорт CSV.
-import { monthShifts, plantParts, type AreaId } from '@allur/contracts';
+import { monthShifts, plantParts, stageOfKind, type AreaId } from '@allur/contracts';
 import type { TwinConfig } from './config';
 import type { TwinState } from './state';
 import { ddmm, num, num1, plural } from './text';
@@ -13,10 +13,13 @@ export interface DataCheck {
   source: string;
 }
 
-const AREA_RU: Partial<Record<AreaId, string>> = { weld: 'Сварка', paint: 'Окраска', assembly: 'Сборка' };
-
 export function dataChecks(state: TwinState, cfg: TwinConfig, month = '2026-10'): DataCheck[] {
   const out: DataCheck[] = [];
+  // Проверки выданных таблиц: в них три линии — сварка, окраска, сборка
+  const kindOf = (area: AreaId) => state.plant.stageById.get(area)?.kind;
+  const areaRu = (area: AreaId) => (['welding', 'painting', 'assembly'].includes(kindOf(area) ?? '') ? state.plant.stageById.get(area)?.short : undefined);
+  const paintId = stageOfKind(state.plant, 'painting')?.id;
+  const asmId = stageOfKind(state.plant, 'assembly')?.id;
 
   // 1. План по моделям против целевого плана
   const plan = state.plans.get(month);
@@ -51,7 +54,10 @@ export function dataChecks(state: TwinState, cfg: TwinConfig, month = '2026-10')
   for (const r of state.reports.values()) {
     const k = `${r.date}#${r.shift}`;
     const v = byKey.get(k) ?? { hours: {} };
-    if (r.area === 'weld' || r.area === 'paint' || r.area === 'assembly') v[r.area] = r.fact;
+    const kind = kindOf(r.area);
+    if (kind === 'welding') v.weld = r.fact;
+    else if (r.area === paintId) v.paint = r.fact;
+    else if (r.area === asmId) v.assembly = r.fact;
     v.hours[r.area] = r.hours;
     byKey.set(k, v);
   }
@@ -68,11 +74,12 @@ export function dataChecks(state: TwinState, cfg: TwinConfig, month = '2026-10')
         source: '1С:MES, сменный отчёт',
       });
     }
-    if (v.assembly !== undefined && v.assembly > cfg.shiftPlan && (v.hours.assembly ?? 8) <= 8) {
+    const asmHours = asmId ? v.hours[asmId] : undefined;
+    if (v.assembly !== undefined && v.assembly > cfg.shiftPlan && (asmHours ?? 8) <= 8) {
       out.push({
         id: `over-takt-${k}`,
         severity: 'contradiction',
-        title: `${ddmmFromDate(date!)}: сборка — ${v.assembly} машин за ${num1(v.hours.assembly ?? 8)} ч`,
+        title: `${ddmmFromDate(date!)}: сборка — ${v.assembly} машин за ${num1(asmHours ?? 8)} ч`,
         detail: `При такте ${cfg.taktMin} мин за 8 часов помещается не больше ${cfg.shiftPlan} машин.`,
         source: '1С:MES, сменный отчёт',
       });
@@ -115,7 +122,7 @@ export function dataChecks(state: TwinState, cfg: TwinConfig, month = '2026-10')
       out.push({
         id: `downtime-vs-hours-${d.key}`,
         severity: 'contradiction',
-        title: `${ddmmFromDate(date)}: простой ${num(mins)} мин (${d.reason.toLowerCase()}), а ${AREA_RU[d.area]?.toLowerCase() ?? 'участок'} отработала ${num1(rep.hours)} ч`,
+        title: `${ddmmFromDate(date)}: простой ${num(mins)} мин (${d.reason.toLowerCase()}), а ${areaRu(d.area)?.toLowerCase() ?? 'участок'} отработала ${num1(rep.hours)} ч`,
         detail: `По сменному отчёту потеряно только ${num(lostMin)} мин и выпущено ${rep.fact} из ${rep.plan}. Либо простой был во второй смене, либо время в отчёте неточное.`,
         source: '1С:MES: журнал простоев и сменный отчёт',
       });
@@ -140,6 +147,29 @@ export function dataChecks(state: TwinState, cfg: TwinConfig, month = '2026-10')
         source: '1С:MES, журнал простоев',
       });
     }
+  }
+  // 7. Отметки кузовов не по порядку: трекер не применил их (последние 10)
+  const tr = state.tracker;
+  for (const c of tr.contradictions.slice(-10).reverse()) {
+    out.push({
+      id: `body-order-${c.bodyId}-${c.ts}`,
+      severity: 'contradiction',
+      title: `Кузов ${c.vin ?? c.bodyId}: отметка не по порядку`,
+      detail: c.text,
+      source: '1С:MES и контроллеры: отметки кузова',
+    });
+  }
+  // 8. Пропущенные и повторные отметки: восстановлены по маршруту и отброшены
+  let restored = 0;
+  for (const b of tr.bodies.values()) restored += b.history.filter((h) => h.restored).length;
+  if (restored > 0 || tr.duplicates > 0) {
+    out.push({
+      id: 'body-marks',
+      severity: 'contradiction',
+      title: `Отметки кузовов: ${restored} пропущено и восстановлено по маршруту, ${tr.duplicates} повторов не учтено`,
+      detail: 'Пропущенную отметку двойник достраивает по маршруту и помечает в паспорте как восстановленную; повтор той же отметки в течение минуты не учитывается.',
+      source: '1С:MES и контроллеры: отметки кузова',
+    });
   }
   return out.filter((x, i) => out.findIndex((y) => y.title === x.title) === i);
 }

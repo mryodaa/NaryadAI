@@ -2,7 +2,8 @@
 // В 1С уходят только агрегаты — сменные отчёты, итоги качества, журнал простоев и ТО, планы.
 // За 1 и 2 октября первая смена — ровно таблицы организаторов (с их противоречиями).
 import {
-  EQUIPMENT_BY_ID,
+  SEED_MODEL,
+  SEED_PLANT,
   addDays,
   plantMs,
   shiftsBetweenDates,
@@ -13,13 +14,16 @@ import {
 } from '@allur/contracts';
 import { CAL, MIN } from './calibration';
 import { Rng, hashSeed } from './rng';
+import { masterOf, reportLines } from './adapters';
 import { World, type DowntimeInfo } from './world';
 
 export const HISTORY_FROM = '2026-09-07';
 export const HISTORY_TO = '2026-10-06';
 
-const LINE_OF = { weld: 'Сварка-1', paint: 'Окраска-1', assembly: 'Сборка-1' } as const;
-const MASTER_OF: Partial<Record<AreaId, string>> = { weld: 'Мастер сварки', paint: 'Мастер окраски', assembly: 'Мастер сборки', qc: 'Мастер ОТК' };
+// История — это прошлое: цех работал в исходном составе, что бы ни было применено сейчас
+const PLANT = SEED_MODEL;
+const LINE_OF: Record<string, string> = Object.fromEntries(reportLines(PLANT).map((r) => [r.area, r.line]));
+const MASTER_OF = (area: AreaId) => masterOf(PLANT, area);
 
 /** Таблицы организаторов (считаем, что строка — первая смена) */
 const GIVEN = {
@@ -59,29 +63,40 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
   // Счётчики роботов на начало истории подобраны так, чтобы к 7 октября получились значения пресета
   const histCycles: Record<string, number> = {};
   const serviceBeforeWindow: { equipmentId: string; daysBefore: number }[] = [];
+  // робот линии под модель видит только кузова своей модели
+  const mixTotal = CAL.mix.onix + CAL.mix.cobalt + CAL.mix.j7;
+  const shareOf = (id: string) => {
+    const e = PLANT.equipmentById.get(id);
+    const st = e?.stationId ? PLANT.stageById.get(e.stageId)?.stations.find((x) => x.id === e.stationId) : undefined;
+    return st?.models ? st.models.reduce((a, m) => a + CAL.mix[m], 0) / mixTotal : 1;
+  };
   for (const [id, c] of Object.entries(presetCycles)) {
-    const start = c - expectedOutput;
+    const share = shareOf(id);
+    const start = c - Math.round(expectedOutput * share);
     if (start >= 0) {
       histCycles[id] = start;
-      serviceBeforeWindow.push({ equipmentId: id, daysBefore: Math.max(1, Math.round(start / 230)) });
+      serviceBeforeWindow.push({ equipmentId: id, daysBefore: Math.max(1, Math.round(start / (230 * share))) });
     } else {
-      histCycles[id] = ((start % interval) + interval) % interval;
+      const every = PLANT.equipmentById.get(id)?.type.serviceIntervalCycles ?? interval;
+      histCycles[id] = ((start % every) + every) % every;
     }
   }
 
-  const world = new World({
-    startMs: plantMs(HISTORY_FROM, 7 * 60 + 59),
-    seed: hashSeed(seed, 'history'),
-    randomFailures: true,
-    microStops: true,
-    filterB2Bodies: 70,
-    filterB1Bodies: 100,
-    robotCycles: histCycles,
-    buffers: { ...CAL.initialBuffers },
-    kitShifts: {},
-    delayedDeliveries: [],
-    serial: CAL.firstSerial - 5200,
-  });
+  const world = new World(
+    {
+      startMs: plantMs(HISTORY_FROM, 7 * 60 + 59),
+      seed: hashSeed(seed, 'history'),
+      randomFailures: true,
+      microStops: true,
+      filterBodies: { 'BOOTH-02': 70, 'BOOTH-01': 100 },
+      robotCycles: histCycles,
+      buffers: { ...CAL.initialBuffers },
+      kitShifts: {},
+      delayedDeliveries: [],
+      serial: CAL.firstSerial - 5200,
+    },
+    SEED_PLANT,
+  );
 
   const endMs = plantMs(addDays(HISTORY_TO, 1), 0);
   const dt = 30_000;
@@ -99,7 +114,8 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
     world.step(dt);
     // Политика ТО роботов: 70% — ночью, 30% — в смену (так и появляются плановые простои в смене)
     for (const e of world.equipmentSnapshot()) {
-      if (!e.id.startsWith('ABB-') || e.cycles < interval || serviceScheduled.has(e.id)) continue;
+      const every = PLANT.equipmentById.get(e.id)?.type.serviceIntervalCycles;
+      if (!every || e.cycles < every || serviceScheduled.has(e.id)) continue;
       serviceScheduled.add(e.id);
       const date = dateOf(world.t);
       const atNight = rng.chance(0.7);
@@ -108,7 +124,7 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
         workOrderId: `hist-wo-${++woSeq}`,
         incidentId: 'history',
         action: 'maintenance',
-        area: 'weld',
+        area: e.area,
         equipmentId: e.id,
         title: 'Плановое ТО',
         scheduledAt: toPlantIso(at),
@@ -119,7 +135,7 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
     }
     for (const ev of world.drain()) {
       if (ev.kind === 'downtime_end') {
-        if (ev.info.equipmentId.startsWith('ABB-') && ev.info.category === 'planned') serviceScheduled.delete(ev.info.equipmentId);
+        if (PLANT.equipmentById.get(ev.info.equipmentId)?.type.serviceIntervalCycles && ev.info.category === 'planned') serviceScheduled.delete(ev.info.equipmentId);
         if (ev.info.micro) continue;
         if (GIVEN_SHIFTS.has(shiftKeyOf(ev.info.from))) continue;
         events.push(downtimeEvent(ev.info, ev.to));
@@ -128,24 +144,25 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
         const s = ev.stats;
         if (GIVEN_SHIFTS.has(s.shift.key)) continue;
         const ts = toPlantIso(s.shift.endMs + 3 * MIN);
-        for (const area of ['weld', 'paint', 'assembly'] as const) {
-          const hours = Math.max(0, (480 - s.stoppedMin[area]) / 60);
+        for (const { area, line } of reportLines(PLANT)) {
+          const hours = Math.max(0, (480 - (s.stoppedMin[area] ?? 0)) / 60);
+          const produced = s.output[area] ?? 0;
+          const defects = s.defects[area] ?? 0;
           events.push({
             eventId: `hist:mes:report:${s.shift.key}:${area}`,
             source: 'mes',
             ts,
             area,
             type: 'shift_report',
-            payload: { date: s.shift.date, shift: s.shift.index, line: LINE_OF[area], plan: 120, fact: s.output[area], hours: round1(hours), load: Math.round((hours / 8) * 100) },
+            payload: { date: s.shift.date, shift: s.shift.index, line, plan: 120, fact: produced, hours: round1(hours), load: Math.round((hours / 8) * 100) },
           });
-          const produced = s.output[area];
           events.push({
             eventId: `hist:qls:quality:${s.shift.key}:${area}`,
             source: 'qls',
             ts,
             area,
             type: 'quality_summary',
-            payload: { date: s.shift.date, shift: s.shift.index, produced, defects: s.defects[area], pct: produced ? round1((s.defects[area] / produced) * 100) : 0 },
+            payload: { date: s.shift.date, shift: s.shift.index, produced, defects, pct: produced ? round1((defects / produced) * 100) : 0 },
           });
         }
       }
@@ -160,7 +177,7 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
       ts: toPlantIso(plantMs(r.date, 16 * 60 + 3)),
       area: r.area,
       type: 'shift_report',
-      payload: { date: r.date, shift: 1, line: LINE_OF[r.area], plan: 120, fact: r.fact, hours: r.hours, load: r.load },
+      payload: { date: r.date, shift: 1, line: LINE_OF[r.area]!, plan: 120, fact: r.fact, hours: r.hours, load: r.load },
     });
   }
   for (const q of GIVEN.quality) {
@@ -183,7 +200,7 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
       area: d.area,
       equipmentId: d.equipmentId,
       type: 'downtime_registered',
-      payload: { reason: d.reason, category: d.category, from: toPlantIso(from), to: toPlantIso(from + d.minutes * MIN), registeredBy: MASTER_OF[d.area]! },
+      payload: { reason: d.reason, category: d.category, from: toPlantIso(from), to: toPlantIso(from + d.minutes * MIN), registeredBy: MASTER_OF(d.area) },
     });
   }
 
@@ -195,7 +212,7 @@ export function generateHistory(seed: number, presetCycles: Record<string, numbe
       eventId: `hist:mes:service:${s.equipmentId}:${date}`,
       source: 'mes',
       ts: toPlantIso(from + 40 * MIN),
-      area: EQUIPMENT_BY_ID[s.equipmentId]!.area,
+      area: PLANT.equipmentById.get(s.equipmentId)!.stageId,
       equipmentId: s.equipmentId,
       type: 'downtime_registered',
       payload: { reason: 'Плановое ТО', category: 'planned', from: toPlantIso(from), to: toPlantIso(from + 30 * MIN), registeredBy: 'Служба ТО' },
@@ -237,7 +254,7 @@ function downtimeEvent(info: DowntimeInfo, to: number): CanonicalEvent {
       category: info.category,
       from: toPlantIso(from),
       to: toPlantIso(Math.max(from + 5 * MIN, roundTo5(to))),
-      registeredBy: info.category === 'planned' ? 'Служба ТО' : (MASTER_OF[info.area] ?? 'Мастер'),
+      registeredBy: info.category === 'planned' ? 'Служба ТО' : MASTER_OF(info.area),
     },
   };
 }

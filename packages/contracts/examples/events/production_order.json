@@ -1,0 +1,15 @@
+{
+  "eventId": "erp-20261007-004812",
+  "source": "erp",
+  "ts": "2026-10-07T07:40:00+05:00",
+  "area": "warehouse",
+  "type": "production_order",
+  "payload": {
+    "bodyId": "B-04812",
+    "model": "onix",
+    "trim": "LT",
+    "colorCode": "W01",
+    "colorName": "Белый",
+    "plannedSeq": 4812
+  }
+}

@@ -2,11 +2,12 @@
 // Ноль декора — только слова, числа, статусы и одна линия тренда в раскрытой строке.
 import { Fragment } from 'react';
 import { ArrowDown, ChevronDown, CircleSlash, Hourglass } from 'lucide-react';
-import type { BufferView, LiveSnapshot } from '@allur/contracts/ref';
+import { MODEL_BY_ID, type BufferView, type LiveSnapshot, type PlantModel } from '@allur/contracts/ref';
 import { usePaintDefect } from '../../api/queries';
 import { Card } from '../../components/ui';
 import { areaRows, bufferAfter, type AreaRowView, type TextView } from '../../state/selectors';
 import { selectArea, useView } from '../../state/view';
+import { usePlantModel } from '../../state/plant';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { BODIES, plural, timeHM } from '../../lib/format';
 import { ShiftTimeline } from '../../screens/shop/ShiftTimeline';
@@ -26,7 +27,8 @@ const ROW_TEXT = 'text-[0.9375rem] 2xl:text-base';
 export function PanelView({ snapshot: s, onIncident }: { snapshot: LiveSnapshot; onIncident: (id: string) => void }) {
   const paintDefect = usePaintDefect(s);
   const selected = useView((v) => v.area);
-  const rows = areaRows(s, paintDefect);
+  const model = usePlantModel();
+  const rows = areaRows(s, paintDefect, model);
   return (
     <div className="view-in flex flex-col gap-3 xl:gap-4">
       <Card className="overflow-hidden">
@@ -39,10 +41,10 @@ export function PanelView({ snapshot: s, onIncident }: { snapshot: LiveSnapshot;
           <span />
         </div>
         {rows.map((r) => {
-          const b = bufferAfter(s, r.id);
+          const b = bufferAfter(s, r.id, model);
           return (
             <Fragment key={r.id}>
-              <AreaRow row={r} open={selected === r.id} shiftRunning={!!s.shift} />
+              <AreaRow row={r} open={selected === r.id} shiftRunning={!!s.shift} lines={linesOf(model, r.id)} />
               {b && <BufferRow b={b} />}
             </Fragment>
           );
@@ -53,14 +55,24 @@ export function PanelView({ snapshot: s, onIncident }: { snapshot: LiveSnapshot;
   );
 }
 
-function AreaRow({ row, open, shiftRunning }: { row: AreaRowView; open: boolean; shiftRunning: boolean }) {
+/** Параллельные линии участка коротко: «Линии: Onix · Cobalt · J7» (линия под одну модель — по модели) */
+function linesOf(model: PlantModel, area: string): string | null {
+  const st = model.stageById.get(area)?.stations ?? [];
+  if (st.length < 2) return null;
+  return `Линии: ${st.map((x) => (x.models?.length === 1 ? MODEL_BY_ID[x.models[0]!].short : x.name)).join(' · ')}`;
+}
+
+function AreaRow({ row, open, shiftRunning, lines }: { row: AreaRowView; open: boolean; shiftRunning: boolean; lines: string | null }) {
   // у склада готовой продукции нет оборудования и графика — раскрывать нечего
-  const expandable = row.id !== 'finished';
+  const expandable = row.kind !== 'warehouse_out';
   const deviation = row.status.tone !== 'neutral';
   const detailsId = `area-details-${row.id}`;
   const cells = (
     <>
-      <span className="font-semibold leading-tight">{row.name}</span>
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="font-semibold">{row.name}</span>
+        {lines && <span className="mt-0.5 text-sm text-ink-3">{lines}</span>}
+      </span>
       <StatusMark status={row.status} />
       <span className="num whitespace-nowrap">
         {row.output ? (

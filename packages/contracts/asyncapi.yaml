@@ -14,6 +14,9 @@ info:
     - Топики allur/kst/twin/# и allur/kst/demo/# публикует только сам шлюз.
     - clientId рекомендуется начинать с типа источника: plc-…, camera-… — так двойник
       показывает, кто подключён.
+    - Коды участков и оборудования в топиках — из конфигурации завода
+      (GET /api/v1/plant/config). Сообщение от оборудования, которого нет в текущей
+      версии конфигурации, отклоняется с причиной.
 defaultContentType: application/json
 
 servers:
@@ -36,6 +39,30 @@ servers:
         default: allur-twin.onrender.com
 
 channels:
+  bodyCheckpoint:
+    address: allur/kst/{area}/{checkpointId}/checkpoint
+    title: Отметка кузова
+    description: Кузов прошёл точку отметки — RFID тележки у станции или трекинг ПЛК конвейера (ступень 1). Точки — в конфигурации завода (GET /api/v1/plant/config). Нужен bodyId или VIN.
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      checkpointId:
+        description: Код точки отметки из конфигурации завода (RFID-BOOTH-02, PLC-CONV-03…)
+    messages:
+      bodyCheckpoint:
+        $ref: '#/components/messages/BodyCheckpoint'
+  operationResult:
+    address: allur/kst/{area}/{equipmentId}/operation
+    title: Результат операции над кузовом
+    description: Робот, инструмент поста или контрольный пост сообщает, выполнена ли операция по кузову (ступень 1).
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      equipmentId:
+        $ref: '#/components/parameters/equipmentId'
+    messages:
+      operationResult:
+        $ref: '#/components/messages/OperationResult'
   equipmentState:
     address: allur/kst/{area}/{equipmentId}/state
     title: Состояние оборудования
@@ -84,6 +111,18 @@ channels:
     messages:
       cameraDetection:
         $ref: '#/components/messages/CameraDetection'
+  equipmentHeartbeat:
+    address: allur/kst/{area}/{equipmentId}/heartbeat
+    title: Пульс связи
+    description: Шлюз контроллеров подтверждает, что оборудование на связи (раз в 10–30 с). Событием цеха не становится — по нему двойник показывает статус подключения «На связи». Нет данных дольше 60 с — «Нет данных».
+    parameters:
+      area:
+        $ref: '#/components/parameters/area'
+      equipmentId:
+        $ref: '#/components/parameters/equipmentId'
+    messages:
+      equipmentHeartbeat:
+        $ref: '#/components/messages/EquipmentHeartbeat'
   workOrders:
     address: allur/kst/twin/work-orders
     title: Наряды от двойника
@@ -91,6 +130,13 @@ channels:
     messages:
       workOrder:
         $ref: '#/components/messages/WorkOrder'
+  plantConfig:
+    address: allur/kst/twin/plant-config
+    title: Конфигурация завода изменилась
+    description: Двойник применил новую версию состава цеха (plant_config_changed). Сообщение сохраняется в брокере (retained) — подписчик сразу получает текущую версию. Полный состав — GET /api/v1/plant/config.
+    messages:
+      plantConfig:
+        $ref: '#/components/messages/PlantConfigChanged'
   demoClock:
     address: allur/kst/demo/clock
     title: Часы демонстрации (служебный)
@@ -100,6 +146,16 @@ channels:
         $ref: '#/components/messages/DemoClock'
 
 operations:
+  sendBodyCheckpoint:
+    action: send
+    channel:
+      $ref: '#/channels/bodyCheckpoint'
+    summary: Считыватель RFID или ПЛК конвейера публикует отметку кузова
+  sendOperationResult:
+    action: send
+    channel:
+      $ref: '#/channels/operationResult'
+    summary: Робот или инструмент поста публикует результат операции
   sendEquipmentState:
     action: send
     channel:
@@ -120,25 +176,66 @@ operations:
     channel:
       $ref: '#/channels/cameraDetection'
     summary: Видеоаналитика публикует детекцию
+  sendEquipmentHeartbeat:
+    action: send
+    channel:
+      $ref: '#/channels/equipmentHeartbeat'
+    summary: Шлюз контроллеров подтверждает связь с оборудованием
   receiveWorkOrders:
     action: receive
     channel:
       $ref: '#/channels/workOrders'
     summary: Системы завода получают наряды двойника
+  receivePlantConfig:
+    action: receive
+    channel:
+      $ref: '#/channels/plantConfig'
+    summary: Шлюзы и имитаторы узнают о новой версии состава цеха
 
 components:
   parameters:
     area:
-      enum: [warehouse, weld, paint, assembly, qc, finished]
-      description: Участок — warehouse (склад комплектующих), weld (сварка), paint (окраска), assembly (сборка), qc (ОТК), finished (склад готовой продукции)
+      description: Код участка из конфигурации завода (латиница, строчные). В исходном составе — warehouse (склад комплектующих), weld (сварка), paint (окраска), assembly (сборка), qc (ОТК), finished (склад готовой продукции)
+      examples: [weld, paint, assembly]
     equipmentId:
-      description: Код оборудования из справочника — ABB-01…ABB-04, PRETREAT, BOOTH-01, BOOTH-02, OVEN, CONV-03, QC-LINE, QC-TRACK, QC-RAIN
+      description: Код оборудования из конфигурации завода. В исходном составе — ABB-01…ABB-04, PRETREAT, BOOTH-01, BOOTH-02, OVEN, CONV-03, QC-LINE, QC-TRACK, QC-RAIN
       examples: [ABB-04, BOOTH-02, CONV-03]
     cameraId:
       description: Код камеры — CAM-WELD, CAM-PAINT, CAM-ASM, CAM-QC
       examples: [CAM-ASM]
 
   messages:
+    BodyCheckpoint:
+      name: BodyCheckpoint
+      title: Отметка кузова
+      payload:
+        type: object
+        required: [direction]
+        properties:
+          bodyId: { type: string, description: 'Внутренний номер кузова (до нанесения VIN)' }
+          vin: { type: string, description: 'VIN, 17 символов' }
+          direction: { type: string, enum: [in, out], description: 'in — кузов пришёл, out — ушёл' }
+          postId: { type: string, description: 'Позиция на конвейере (пост 1С:MES) — для трекинга ПЛК' }
+          ts: { type: string, format: date-time }
+      examples:
+        - name: Кузов в Камере-02 (RFID)
+          payload: { bodyId: B-04815, vin: KZACN1S13TK004815, direction: in, ts: '2026-10-07T13:58:00+05:00' }
+    OperationResult:
+      name: OperationResult
+      title: Результат операции
+      payload:
+        type: object
+        required: [operation, result]
+        properties:
+          bodyId: { type: string }
+          vin: { type: string }
+          operation: { type: string, description: 'Код операции из каталога: weld_sides, basecoat, wheels…' }
+          result: { type: string, enum: [ok, nok] }
+          details: { type: string }
+          ts: { type: string, format: date-time }
+      examples:
+        - name: Боковины сварены
+          payload: { bodyId: B-04820, operation: weld_sides, result: ok, ts: '2026-10-07T12:31:00+05:00' }
     EquipmentState:
       name: EquipmentState
       title: Состояние оборудования
@@ -204,8 +301,8 @@ components:
         properties:
           metric:
             type: string
-            enum: [filter_dp_pa, motor_current_a, vibration_mm_s]
-            description: filter_dp_pa — перепад давления на фильтре (Па), motor_current_a — ток привода (А), vibration_mm_s — вибрация (мм/с)
+            enum: [filter_dp_pa, motor_current_a, vibration_mm_s, temperature_c, pressure_bar, torque_nm]
+            description: filter_dp_pa — перепад давления на фильтре (Па), motor_current_a — ток привода (А), vibration_mm_s — вибрация (мм/с), temperature_c — температура (°C), pressure_bar — давление (бар), torque_nm — момент затяжки (Н·м)
           value:
             type: number
           ts:
@@ -243,6 +340,26 @@ components:
             kind: line_stopped
             clipUrl: /media/clips/assembly-stop.mp4
             ts: '2026-10-07T10:06:00+05:00'
+
+    EquipmentHeartbeat:
+      name: EquipmentHeartbeat
+      title: Пульс связи
+      payload:
+        type: object
+        properties:
+          status:
+            type: string
+            enum: [run, idle, fault, maintenance]
+            description: Текущее состояние (справочно, событием не становится)
+          ts:
+            type: string
+            format: date-time
+            description: Время на шлюзе контроллеров
+      examples:
+        - name: Камера окраски на связи
+          payload:
+            status: run
+            ts: '2026-10-07T13:36:00+05:00'
 
     WorkOrder:
       name: WorkOrder
@@ -288,6 +405,26 @@ components:
             durationMin: 25
             issuedAt: '2026-10-07T13:45:00+05:00'
             issuedBy: Начальник производства
+
+    PlantConfigChanged:
+      name: PlantConfigChanged
+      title: Новая версия конфигурации завода
+      payload:
+        type: object
+        required: [version, updatedAt]
+        properties:
+          version:
+            type: integer
+            minimum: 1
+            description: Номер версии (растёт с каждым применением и откатом)
+          updatedAt:
+            type: string
+            format: date-time
+      examples:
+        - name: Добавили камеру окраски
+          payload:
+            version: 2
+            updatedAt: '2026-10-07T14:05:00+05:00'
 
     DemoClock:
       name: DemoClock

@@ -1,6 +1,6 @@
 // Паспорт автомобиля: маршрут кузова по постам со временем прохода и условиями в момент прохода,
 // отметки контроля качества. Ключевая фишка двойника — у каждой машины видна история изготовления.
-import { DEFECT_BY_ID, EQUIPMENT_BY_ID, MODEL_BY_ID, POST_BY_ID, CHECKPOINTS, toPlantIso, type AreaId, type CanonicalEvent, type ModelId, type SourceId, type Tone } from '@allur/contracts';
+import { DEFECT_BY_ID, MODEL_BY_ID, CHECKPOINTS, toPlantIso, type AreaId, type BodyDetail, type CanonicalEvent, type ModelId, type SourceId, type Tone } from '@allur/contracts';
 import type { TwinConfig } from './config';
 import type { TwinState } from './state';
 import { num } from './text';
@@ -29,20 +29,25 @@ export interface Passport {
   steps: PassportStep[];
   checks: PassportCheck[];
   plcConnected: boolean;
+  /** Кузов по трекеру: маршрут операций, история отметок, флаги */
+  body: BodyDetail | null;
 }
 
 const DECISION_RU: Record<string, string> = { rework: 'доработка', repaint: 'повторная окраска', scrap: 'списание' };
 
 export function buildPassport(state: TwinState, vin: string, events: CanonicalEvent[], cfg: TwinConfig, now: number): Passport | null {
-  const passes = events.filter((e): e is Extract<CanonicalEvent, { type: 'post_passed' }> => e.type === 'post_passed').sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  if (!passes.length) return null;
-  const model = passes[0]!.payload.model;
-  const steps: PassportStep[] = passes.map((p) => {
-    const ts = Date.parse(p.ts);
-    const post = POST_BY_ID[p.payload.post];
+  const tracked = state.tracker.find(vin);
+  if (!tracked) return null;
+  const body = state.tracker.detail(tracked, now);
+  const plant = state.plant;
+  // шаги паспорта — отметки кузова: вход и выход участков, оборудование (RFID, ПЛК, 1С:MES)
+  const marks = tracked.history.filter((h) => h.kind === 'checkpoint' || h.kind === 'restored' || h.kind === 'rework');
+  const steps: PassportStep[] = marks.map((h) => {
+    const ts = h.ts;
     const conditions: PassportStep['conditions'] = [];
-    const eqId = p.equipmentId ?? post?.equipmentId;
-    if (eqId === 'BOOTH-02' || eqId === 'BOOTH-01') {
+    const eqId = h.equipmentId;
+    const eq = eqId ? plant.equipmentById.get(eqId) : undefined;
+    if (eqId && eq?.type.fields.includes('filterDpPa')) {
       const dp = state.valueAt(eqId, 'filter_dp_pa', ts);
       if (dp !== null) {
         conditions.push({
@@ -56,15 +61,15 @@ export function buildPassport(state: TwinState, vin: string, events: CanonicalEv
     if (eqId) {
       const stop = state.autoStops.find((a) => a.equipmentId === eqId && a.from <= ts && (a.to ?? now) >= ts - 5 * 60_000 && a.from >= ts - 30 * 60_000);
       if (stop) {
-        conditions.push({ label: EQUIPMENT_BY_ID[eqId]?.name ?? eqId, value: `${stop.status === 'fault' ? 'авария' : 'обслуживание'} незадолго до прохода${stop.code ? `, код ${stop.code}` : ''}`, tone: 'attention', source: 'plc' });
+        conditions.push({ label: eq?.name ?? eqId, value: `${stop.status === 'fault' ? 'авария' : 'обслуживание'} незадолго до прохода${stop.code ? `, код ${stop.code}` : ''}`, tone: 'attention', source: 'plc' });
       }
-      const interval = EQUIPMENT_BY_ID[eqId]?.serviceIntervalCycles;
+      const interval = eq?.type.serviceIntervalCycles;
       const s = state.eq[eqId];
       if (interval && s?.cycles !== null && s?.cycles !== undefined && s.cyclesTs !== null && Math.abs(s.cyclesTs - ts) < 2 * 3600_000) {
         conditions.push({ label: 'Наработка робота', value: `${num(s.cycles)} из ${num(interval)} циклов`, tone: s.cycles / interval > 0.9 ? 'maintenance' : 'neutral', source: 'plc' });
       }
     }
-    return { post: p.payload.post, postName: post?.name ?? p.payload.post, area: p.area, at: p.ts, conditions };
+    return { post: h.checkpointId ?? h.stageId ?? '', postName: h.text, area: h.stageId ?? '', at: toPlantIso(ts), conditions };
   });
   const checks: PassportCheck[] = events
     .filter((e): e is Extract<CanonicalEvent, { type: 'nonconformity' }> => e.type === 'nonconformity')
@@ -75,16 +80,25 @@ export function buildPassport(state: TwinState, vin: string, events: CanonicalEv
       decision: DECISION_RU[n.payload.decision] ?? n.payload.decision,
       source: n.source,
     }));
-  const last = passes[passes.length - 1]!;
-  const lastPost = POST_BY_ID[last.payload.post];
+  const loc = body.loc;
+  const stage = plant.stageById.get(loc.stageId);
+  const eqName = loc.equipmentId ? plant.equipmentById.get(loc.equipmentId)?.name : undefined;
+  const where =
+    loc.kind === 'finished'
+      ? 'Выпущен: на складе готовой продукции'
+      : loc.kind === 'buffer'
+        ? `Сейчас: в очереди после «${stage?.short ?? loc.stageId}»`
+        : loc.kind === 'warehouse'
+          ? 'Сейчас: заказ принят, машинокомплект на складе'
+          : `Сейчас: ${stage?.short ?? loc.stageId}${eqName ? `, ${eqName}${loc.estimated ? ' (оценка по норме времени)' : ''}` : ' (точное место не отмечено)'}`;
   return {
-    vin,
-    model,
-    modelName: MODEL_BY_ID[model]?.name ?? model,
-    where: last.payload.post === 'FG-IN' ? 'Выпущен: на складе готовой продукции' : `Сейчас: после поста «${lastPost?.name ?? last.payload.post}»`,
+    vin: tracked.vin ?? tracked.bodyId,
+    model: tracked.model,
+    modelName: tracked.model ? MODEL_BY_ID[tracked.model].name : 'Модель не известна',
+    where,
     steps,
     checks,
     plcConnected: state.plcConnected(now),
+    body,
   };
-  void toPlantIso;
 }

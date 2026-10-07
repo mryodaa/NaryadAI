@@ -1,15 +1,15 @@
 // Инциденты: первый сигнал открывает, следующие подтверждают и уточняют причину.
 // Каждый инцидент — история из четырёх блоков: что случилось, почему, чем грозит, что делать.
 // Варианты решений прогоняются через простую модель линии до конца смены — в машинах и тенге.
+// Участки, буферы, камеры и конвейеры — из конфигурации завода.
 import {
-  AREA_BY_ID,
-  BUFFERS,
-  EQUIPMENT,
-  EQUIPMENT_BY_ID,
   KITS,
+  MODELS,
   MODEL_BY_ID,
   addDays,
   currentOrNextShift,
+  dedicatedStation,
+  inflect,
   plantMs,
   plantParts,
   shiftAt,
@@ -18,6 +18,7 @@ import {
   type BufferId,
   type Explain,
   type ExplainInput,
+  type PlantEquipment,
   type SourceId,
   type Tone,
   type WorkOrder,
@@ -26,6 +27,7 @@ import type { TwinConfig } from './config';
 import type { TwinState } from './state';
 import { bufferCapacity, bufferCounts, type AreaEval, type Signal } from './status';
 import { filterForecast, lastFilterReplacement, paintFilterCause, qualityAlarm, qualityWindow, typicalFilterLifeHours, type FilterCause } from './quality';
+import { driveEquipment, filterBooths, outputStage, qualityStages, serviceInterval, stageShort } from './plant';
 import { bodies, capitalize, cars, ddmm, hm, minutes, money, num, num1, pct1, plural } from './text';
 
 export type IncidentType = 'quality' | 'stop' | 'equipment' | 'stock' | 'early_warning';
@@ -93,18 +95,32 @@ export interface DetectContext {
 function predictedBuffer(ctx: DetectContext, id: BufferId, at: number): number {
   const counts = bufferCounts(ctx.state);
   const hours = Math.max(0, (at - ctx.now) / 3600_000);
-  return Math.max(0, Math.min(bufferCapacity(id), counts[id] + ctx.bufferTrend[id] * hours));
+  return Math.max(0, Math.min(bufferCapacity(ctx.state, id), (counts[id] ?? 0) + (ctx.bufferTrend[id] ?? 0) * hours));
 }
 
-/** Сколько машин не выпустим, если участок остановится в момент at на minutes минут */
-export function projectedStopLoss(ctx: DetectContext, area: AreaId, at: number, mins: number): number {
+/**
+ * Сколько машин не выпустим, если участок остановится в момент at на minutes минут. Выпуск считается
+ * по сборке: остановку выше по потоку гасят буферы до сборки, ниже — свободное место в буферах после неё.
+ * share — какую долю мощности теряет участок (встала одна из N параллельных станций).
+ */
+export function projectedStopLoss(ctx: DetectContext, area: AreaId, at: number, mins: number, share = 1): number {
+  const plant = ctx.state.plant;
   const takt = ctx.cfg.taktMin;
+  const stage = plant.stageById.get(area);
+  const out = outputStage(plant);
+  if (!stage || !stage.producing || !out) return 0;
+  const idx = (id: string) => plant.stageById.get(id)?.index ?? -1;
   let absorb = 0;
-  if (area === 'paint') absorb = predictedBuffer(ctx, 'paint-assembly', at) * takt;
-  else if (area === 'weld') absorb = (predictedBuffer(ctx, 'weld-paint', at) + predictedBuffer(ctx, 'paint-assembly', at)) * takt;
-  else if (area === 'qc') absorb = (bufferCapacity('assembly-qc') - predictedBuffer(ctx, 'assembly-qc', at)) * takt + 20;
-  else if (area === 'warehouse' || area === 'finished') absorb = Infinity;
-  return Math.max(0, Math.round((mins - absorb) / takt));
+  if (stage.index < out.index) {
+    let queued = 0;
+    for (const b of plant.buffers) if (idx(b.from) >= stage.index && idx(b.to) <= out.index) queued += predictedBuffer(ctx, b.id, at);
+    absorb = queued * takt;
+  } else if (stage.index > out.index) {
+    let free = 0;
+    for (const b of plant.buffers) if (idx(b.from) >= out.index && idx(b.to) <= stage.index) free += bufferCapacity(ctx.state, b.id) - predictedBuffer(ctx, b.id, at);
+    absorb = free * takt + 20;
+  }
+  return Math.max(0, Math.round((mins * share - absorb) / takt));
 }
 
 function totalCost(ctx: DetectContext, o: Pick<IncidentOption, 'carsLost' | 'repaints' | 'directCost'>): number {
@@ -124,13 +140,20 @@ function shiftEndOf(now: number): number {
   return (shiftAt(now) ?? currentOrNextShift(now)).endMs;
 }
 
-const areaShort = (a: AreaId) => AREA_BY_ID[a].short;
+/** Камера, к которой относится брак окраски: где нашлась причина, иначе — где меняли фильтр, иначе первая */
+function paintBooth(ctx: DetectContext, area: AreaId, cause: FilterCause | null): PlantEquipment | undefined {
+  const booths = filterBooths(ctx.state.plant, area);
+  const id = cause?.equipmentId ?? lastFilterReplacement(ctx.state, ctx.now, area)?.equipmentId;
+  return booths.find((b) => b.id === id) ?? booths[0];
+}
 
 // ---------------------------------------------------------------------------
 // Детекторы
 
-function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', isOpen: boolean): Draft | null {
+function detectQuality(ctx: DetectContext, area: AreaId, isOpen: boolean): Draft | null {
   const { state, now, cfg } = ctx;
+  const areaShort = (a: AreaId) => stageShort(state.plant, a);
+  const stage = state.plant.stageById.get(area);
   const qa = qualityAlarm(state, area, now, cfg, isOpen);
   if (!qa.alarm) return null;
   const win = qa.window;
@@ -155,10 +178,14 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
   let reasonShort = `брак ${pct1(win.share)}`;
   const signals: Signal[] = [{ source: 'qls', ts: now, text: `1С:QLS: ${num(win.defects)} ${plural(win.defects, ['несоответствие', 'несоответствия', 'несоответствий'])} за 2 часа (${pct1(win.share)})` }];
 
-  if (area === 'paint') {
-    equipmentId = 'BOOTH-02';
-    const cause: FilterCause | null = paintFilterCause(state, now, cfg);
-    const fc = filterForecast(state, now, cfg);
+  const cause: FilterCause | null = stage?.kind === 'painting' ? paintFilterCause(state, now, cfg, undefined, area) : null;
+  const booth = stage?.kind === 'painting' ? paintBooth(ctx, area, cause) : undefined;
+  const after = stage?.bufferAfter?.id;
+  if (booth) {
+    equipmentId = booth.id;
+    const gen = inflect(booth.name, 'gen');
+    const acc = inflect(booth.name, 'acc');
+    const fc = filterForecast(state, now, cfg, booth.id);
     const rate = cause ? Math.max(cause.rateAbove, win.share) : win.share;
     const shiftEnd = shiftEndOf(now);
     if (cause) {
@@ -168,13 +195,13 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
           ? `${cause.sentence}. Ниже порога — ни одного случая на ${bodies(cause.bodiesBelow)}, выше — ${pct1(cause.rateAbove)} брака.`
           : `${cause.sentence}. Выше порога сорность встречается в ${num1(cause.lift)} раза чаще (${pct1(cause.rateAbove)} против ${pct1(cause.rateBelow)}).`;
       chain.push(
-        { label: 'Контроллер Камеры-02 — перепад давления на фильтре сейчас', value: `${num(cause.dpNow ?? fc?.dpNow ?? 0)} Па (норма до ${cfg.filter.normPa}, предел ${cfg.filter.limitPa})`, source: 'plc' },
-        { label: '1С:MES — маршрут кузовов', value: `${num(cause.bodiesAbove + cause.bodiesBelow)} кузовов прошли Камеру-02 за 8 часов`, source: 'mes' },
+        { label: `Контроллер ${gen} — перепад давления на фильтре сейчас`, value: `${num(cause.dpNow ?? fc?.dpNow ?? 0)} Па (норма до ${cfg.filter.normPa}, предел ${cfg.filter.limitPa})`, source: 'plc' },
+        { label: '1С:MES — маршрут кузовов', value: `${num(cause.bodiesAbove + cause.bodiesBelow)} кузовов прошли ${acc} за 8 часов`, source: 'mes' },
         { label: 'Сравнение по VIN', value: `выше ${cause.threshold} Па: ${cause.defectsAbove} брака на ${cause.bodiesAbove} кузовов; ниже: ${cause.defectsTotal - cause.defectsAbove} на ${cause.bodiesBelow}`, source: 'qls' },
       );
-      signals.push({ source: 'plc', ts: now, equipmentId: 'BOOTH-02', text: `Контроллер Камеры-02: перепад на фильтре ${num(cause.dpNow ?? 0)} Па` });
-      reasonShort = 'Камера-02: фильтр забит';
-      const s = state.series('BOOTH-02', 'filter_dp_pa');
+      signals.push({ source: 'plc', ts: now, equipmentId: booth.id, text: `Контроллер ${gen}: перепад на фильтре ${num(cause.dpNow ?? 0)} Па` });
+      reasonShort = `${booth.name}: фильтр забит`;
+      const s = state.series(booth.id, 'filter_dp_pa');
       const dp: { t: number; v: number }[] = [];
       if (s) for (let i = 0; i < s.ts.length; i++) if (s.ts[i]! >= now - 8 * 3600_000 && s.ts[i]! <= now) dp.push({ t: s.ts[i]!, v: s.v[i]! });
       chart = {
@@ -186,20 +213,21 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
         defects: cause.points.filter((p) => p.defect).map((p) => ({ t: p.ts, dp: p.dp })),
       };
     } else if (!state.plcConnected(now)) {
-      const last = lastFilterReplacement(state, now);
-      const life = typicalFilterLifeHours(state);
+      const last = lastFilterReplacement(state, now, area);
       if (last) {
+        const life = typicalFilterLifeHours(state, last.equipmentId);
+        const lastGen = inflect(state.plant.equipmentById.get(last.equipmentId)?.name ?? booth.name, 'gen');
         const hoursSince = workHoursBetween(last.at, now);
-        whyText = `Перепад на фильтре не виден (контроллеры не подключены). По журналу 1С:MES фильтр Камеры-02 меняли ${num1(hoursSince)} ч работы назад, обычно его хватает на ~${num(life)} ч. Сорность — типичный признак засорённого фильтра.`;
-        chain.push({ label: '1С:MES — последняя замена фильтра Камеры-02', value: `${ddmm(last.at)} в ${hm(last.at)}, ${num1(hoursSince)} ч работы назад`, source: 'mes' });
-        reasonShort = 'вероятно, фильтр Камеры-02';
+        whyText = `Перепад на фильтре не виден (контроллеры не подключены). По журналу 1С:MES фильтр ${lastGen} меняли ${num1(hoursSince)} ч работы назад, обычно его хватает на ~${num(life)} ч. Сорность — типичный признак засорённого фильтра.`;
+        chain.push({ label: `1С:MES — последняя замена фильтра ${lastGen}`, value: `${ddmm(last.at)} в ${hm(last.at)}, ${num1(hoursSince)} ч работы назад`, source: 'mes' });
+        reasonShort = `вероятно, фильтр ${lastGen}`;
       }
     }
 
     const limitAt = fc?.limitAt ?? null;
     if (limitAt !== null) {
       const bodiesToLimit = Math.max(0, (limitAt - now) / (cfg.taktMin * 60_000));
-      carsLost = projectedStopLoss(ctx, 'paint', limitAt, cfg.filter.forcedMin);
+      carsLost = projectedStopLoss(ctx, area, limitAt, cfg.filter.forcedMin);
       repaints = Math.round(bodiesToLimit * rate);
       const hoursTo = (limitAt - now) / 3600_000;
       threatText = `Через ~${num1(hoursTo)} ч (около ${hm(limitAt)}) фильтр выйдет на предел ${cfg.filter.limitPa} Па — вынужденная остановка ~${cfg.filter.forcedMin} мин: около ${cars(carsLost)} не выпустим и около ${bodies(repaints)} уйдут на повторную окраску.`;
@@ -210,17 +238,17 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
         opts.push({
           id: 'replace_at_shift_change',
           title: `Заменить фильтр в пересменку, в ${hm(shiftEnd)}`,
-          detail: `Замена по графику ~${cfg.filter.plannedMin} мин, бригада и фильтр готовятся заранее. Буфер перед сборкой к ${hm(shiftEnd)} — около ${bodies(Math.round(predictedBuffer(ctx, 'paint-assembly', shiftEnd)))} (~${Math.round(predictedBuffer(ctx, 'paint-assembly', shiftEnd) * cfg.taktMin)} мин работы сборки).`,
-          carsLost: projectedStopLoss(ctx, 'paint', shiftEnd, cfg.filter.plannedMin),
+          detail: `Замена по графику ~${cfg.filter.plannedMin} мин, бригада и фильтр готовятся заранее. Буфер перед сборкой к ${hm(shiftEnd)} — около ${bodies(Math.round(after ? predictedBuffer(ctx, after, shiftEnd) : 0))} (~${Math.round((after ? predictedBuffer(ctx, after, shiftEnd) : 0) * cfg.taktMin)} мин работы сборки).`,
+          carsLost: projectedStopLoss(ctx, area, shiftEnd, cfg.filter.plannedMin),
           repaints: Math.round(bodiesTo * rate),
           directCost: cfg.money.filterReplacement,
           risk: 'низкий',
           riskText: `Запас до предела — ${minutes((limitAt - shiftEnd) / 60_000)}`,
           workOrder: {
             action: 'replace_filter',
-            area: 'paint',
-            equipmentId: 'BOOTH-02',
-            title: `Заменить фильтр Камеры-02 в пересменку (${hm(shiftEnd)})`,
+            area,
+            equipmentId: booth.id,
+            title: `Заменить фильтр ${gen} в пересменку (${hm(shiftEnd)})`,
             scheduledAt: toPlantIso(shiftEnd),
             durationMin: cfg.filter.plannedMin,
           },
@@ -230,13 +258,13 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
       opts.push({
         id: 'replace_now',
         title: 'Заменить фильтр сейчас',
-        detail: `Остановить Камеру-02 через 10 минут на ~${cfg.filter.plannedMin} мин. Брак прекратится сразу; буфер перед сборкой сейчас — ${bodies(Math.round(predictedBuffer(ctx, 'paint-assembly', nowAt)))} (~${Math.round(predictedBuffer(ctx, 'paint-assembly', nowAt) * cfg.taktMin)} мин).`,
-        carsLost: projectedStopLoss(ctx, 'paint', nowAt, cfg.filter.plannedMin),
+        detail: `Остановить ${acc} через 10 минут на ~${cfg.filter.plannedMin} мин. Брак прекратится сразу; буфер перед сборкой сейчас — ${bodies(Math.round(after ? predictedBuffer(ctx, after, nowAt) : 0))} (~${Math.round((after ? predictedBuffer(ctx, after, nowAt) : 0) * cfg.taktMin)} мин).`,
+        carsLost: projectedStopLoss(ctx, area, nowAt, cfg.filter.plannedMin),
         repaints: Math.round(((nowAt - now) / (cfg.taktMin * 60_000)) * rate),
         directCost: cfg.money.filterReplacement,
         risk: 'низкий',
         riskText: 'Остановка посреди смены',
-        workOrder: { action: 'replace_filter', area: 'paint', equipmentId: 'BOOTH-02', title: 'Заменить фильтр Камеры-02 сейчас', scheduledAt: toPlantIso(nowAt), durationMin: cfg.filter.plannedMin },
+        workOrder: { action: 'replace_filter', area, equipmentId: booth.id, title: `Заменить фильтр ${gen} сейчас`, scheduledAt: toPlantIso(nowAt), durationMin: cfg.filter.plannedMin },
       });
       opts.push({
         id: 'do_nothing',
@@ -279,12 +307,11 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
     threat: { text: `${threatText} Потери ≈ ${money(moneyLost)}.`, carsLost, repaints, money: moneyLost },
     options,
     explain: {
-      rule:
-        area === 'paint'
-          ? 'Для каждого кузова с сорностью берём перепад давления на фильтре Камеры-02 в момент его прохода (по VIN из 1С:MES и времени из контроллера). Сравниваем долю брака выше и ниже порога. Срок до предела — экспоненциальный тренд перепада за последние 90 минут.'
-          : `Доля несоответствий 1С:QLS по кузовам, прошедшим участок за 2 часа, выше нормы ${pct1(cfg.defectNorm)}.`,
+      rule: booth
+        ? `Для каждого кузова с сорностью берём перепад давления на фильтре ${inflect(booth.name, 'gen')} в момент его прохода (по VIN из 1С:MES и времени из контроллера). Сравниваем долю брака выше и ниже порога. Срок до предела — экспоненциальный тренд перепада за последние 90 минут.`
+        : `Доля несоответствий 1С:QLS по кузовам, прошедшим участок за 2 часа, выше нормы ${pct1(cfg.defectNorm)}.`,
       inputs: chain,
-      sources: area === 'paint' ? ['qls', 'mes', 'plc'] : ['qls', 'mes'],
+      sources: booth ? ['qls', 'mes', 'plc'] : ['qls', 'mes'],
       conclusion: whyText,
       assumptions: [
         `Норма перепада — до ${cfg.filter.normPa} Па, предел — ${cfg.filter.limitPa} Па, вынужденная замена ~${cfg.filter.forcedMin} мин, плановая ~${cfg.filter.plannedMin} мин.`,
@@ -301,6 +328,7 @@ function detectQuality(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly', 
 
 function genericQualityOptions(ctx: DetectContext, area: AreaId, repaints: number): IncidentOption[] {
   const { cfg, now } = ctx;
+  const areaShort = (a: AreaId) => stageShort(ctx.state.plant, a);
   const shiftEnd = shiftEndOf(now);
   return finalizeOptions(ctx, [
     {
@@ -349,17 +377,20 @@ const TYPICAL_STOP_MIN: [RegExp, number][] = [
   [/дозиров/i, 20],
 ];
 
-function detectStop(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly' | 'qc'): Draft | null {
+function detectStop(ctx: DetectContext, area: AreaId): Draft | null {
   const ev = ctx.evals[area];
-  if (!ev || !(ev.status === 'fault' || ev.status === 'maintenance' || (ev.status === 'starved' && ev.reason?.startsWith('Нет комплектов')))) return null;
-  if (ev.status === 'maintenance' && /план|наряд/i.test(ev.reason ?? '')) return null;
+  if (!ev || !(ev.status === 'fault' || ev.status === 'maintenance' || ev.status === 'reduced' || (ev.status === 'starved' && ev.reason?.startsWith('Нет комплектов')))) return null;
+  if ((ev.status === 'maintenance' || ev.status === 'reduced') && /план|наряд/i.test(ev.reason ?? '')) return null;
   const { cfg, now } = ctx;
+  const areaShort = (a: AreaId) => stageShort(ctx.state.plant, a);
+  const reduced = ev.status === 'reduced' && ev.stations ? ev.stations : null;
+  const share = reduced ? 1 - reduced.working / reduced.total : 1;
   const since = ev.since ?? now;
   const elapsed = (now - since) / 60_000;
   const reason = ev.reason ?? 'остановка';
   const typical = TYPICAL_STOP_MIN.find(([re]) => re.test(reason))?.[1] ?? 30;
   const remaining = Math.max(5, typical - elapsed);
-  const loss = projectedStopLoss(ctx, area, now, remaining);
+  const loss = projectedStopLoss(ctx, area, now, remaining, share);
   const shiftEnd = shiftEndOf(now);
   const overtimeRecover = Math.min(loss, Math.round(60 / cfg.taktMin));
   const eqId = ev.causeEquipment;
@@ -395,11 +426,11 @@ function detectStop(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly' | 'q
     type: 'stop',
     area,
     equipmentId: eqId,
-    tone: ev.status === 'maintenance' ? 'maintenance' : ev.status === 'starved' ? 'waiting' : 'fault',
-    title: `${areaShort(area)} стоит: ${reason.toLowerCase()}`,
-    impactText: loss > 0 ? `−${cars(loss)} к концу смены` : 'буфер пока перекрывает остановку',
+    tone: reduced ? 'attention' : ev.status === 'maintenance' ? 'maintenance' : ev.status === 'starved' ? 'waiting' : 'fault',
+    title: reduced ? `${areaShort(area)}: снижена мощность — ${reason.toLowerCase()}` : `${areaShort(area)} стоит: ${reason.toLowerCase()}`,
+    impactText: loss > 0 ? `−${cars(loss)} к концу смены` : reduced ? 'остальные станции и буфер пока перекрывают потерю' : 'буфер пока перекрывает остановку',
     impactCars: loss,
-    happened: { text: `${areaShort(area)}: остановка с ${hm(since)} — ${reason.toLowerCase()}`, at: since },
+    happened: { text: reduced ? `${areaShort(area)}: с ${hm(since)} ${reason.toLowerCase()}` : `${areaShort(area)}: остановка с ${hm(since)} — ${reason.toLowerCase()}`, at: since },
     why: {
       text: hasPlc
         ? 'Контроллер сообщил о состоянии оборудования сразу — причина и код известны.'
@@ -427,6 +458,7 @@ function detectStop(ctx: DetectContext, area: 'weld' | 'paint' | 'assembly' | 'q
 }
 
 const AREA_STATUS_WORD: Record<string, string> = {
+  reduced: 'снижена мощность',
   fault: 'авария',
   maintenance: 'обслуживание',
   starved: 'ждёт кузов',
@@ -436,6 +468,10 @@ const AREA_STATUS_WORD: Record<string, string> = {
 /** Наработка робота: по контроллеру, а без него — по числу кузовов из 1С:MES с последнего ТО */
 export function robotCycles(state: TwinState, id: string, now: number): { cycles: number; source: SourceId; since?: number } | null {
   const s = state.eq[id];
+  const eq = state.plant.equipmentById.get(id);
+  const stage = eq ? state.plant.stageById.get(eq.stageId) : undefined;
+  const station = stage?.stations.find((st) => st.id === eq?.stationId);
+  const stations = Math.max(1, stage?.stations.length ?? 1);
   if (s?.cycles !== null && s?.cycles !== undefined && s.cyclesTs !== null && now - s.cyclesTs < 6 * 3600_000) return { cycles: s.cycles, source: 'plc' };
   let lastService: number | null = null;
   for (const d of state.downtimes.values()) {
@@ -447,18 +483,35 @@ export function robotCycles(state: TwinState, id: string, now: number): { cycles
   let cycles = 0;
   const serviceDate = plantParts(lastService).date;
   for (const r of state.reports.values()) {
-    if (r.area !== 'weld') continue;
+    if (r.area !== eq?.stageId) continue;
     const shiftStart = plantMs(r.date, r.shift === 2 ? 16 * 60 : 8 * 60);
-    if (shiftStart >= lastService && r.date >= serviceDate && shiftStart < state.runStartMs) cycles += r.fact;
+    if (shiftStart >= lastService && r.date >= serviceDate && shiftStart < state.runStartMs) cycles += stations > 1 ? Math.round(r.fact / stations) : r.fact;
   }
-  for (const p of state.passes) if (p.post === 'WELD-4' && p.ts >= Math.max(lastService, state.runStartMs) && p.ts <= now) cycles++;
+  // без контроллера — кузова, отмеченные на станции робота (или на выходе участка, если станцию не отмечают)
+  const seen = new Set<string>();
+  const onStation = (p: (typeof state.passes)[number]) => (p.kind === 'mark' && p.equipmentId !== undefined && station?.equipment.some((e) => e.id === p.equipmentId)) || (p.kind === 'exit' && p.area === eq?.stageId);
+  const byStation = state.passes.some((p) => p.kind === 'mark' && p.equipmentId === id);
+  for (const p of state.passes) {
+    if (p.ts < Math.max(lastService, state.runStartMs) || p.ts > now || seen.has(p.vin)) continue;
+    if (byStation ? p.kind === 'mark' && p.equipmentId === id : onStation(p) && p.kind === 'exit' && (!station?.models || station.models.includes(p.model))) {
+      seen.add(p.vin);
+      cycles++;
+    }
+  }
   return { cycles, source: 'mes', since: lastService };
 }
 
 function detectEquipment(ctx: DetectContext, id: string): Draft | null {
   const { state, now, cfg } = ctx;
-  const interval = EQUIPMENT_BY_ID[id]?.serviceIntervalCycles;
+  const interval = serviceInterval(state.plant, id);
   if (!interval) return null;
+  const eq = state.plant.equipmentById.get(id)!;
+  const area = eq.stageId;
+  const stage = state.plant.stageById.get(area);
+  const station = stage?.stations.find((st) => st.id === eq.stationId);
+  // линия под модели: робот видит только кузова своих моделей, её простой стоит долю этих моделей
+  const modelShare = station?.models ? station.models.reduce((a, m) => a + shareOf(state, m), 0) : 1;
+  const share = station?.models ? modelShare : eq.place === 'station' && stage && stage.stations.length > 1 ? 1 / stage.stations.length : 1;
   const c = robotCycles(state, id, now);
   if (!c) return null;
   const ratio = c.cycles / interval;
@@ -466,11 +519,11 @@ function detectEquipment(ctx: DetectContext, id: string): Draft | null {
   const errors24h = state.autoStops.filter((a) => a.equipmentId === id && a.from > now - 24 * 3600_000 && a.status === 'fault').length;
   const level: IncidentOption['risk'] = ratio >= 0.97 || errors24h >= 2 ? 'высокий' : ratio >= 0.93 ? 'средний' : 'низкий';
   const left = Math.max(0, interval - c.cycles);
-  const name = EQUIPMENT_BY_ID[id]!.name;
+  const name = eq.name;
   const nightDate = addDays(plantParts(now).date, 1);
   const nightAt = plantMs(nightDate, 30);
   const pFail = level === 'высокий' ? 0.35 : level === 'средний' ? 0.15 : 0.05;
-  const failLoss = projectedStopLoss(ctx, 'weld', now + 2 * 3600_000, 25);
+  const failLoss = projectedStopLoss(ctx, area, now + 2 * 3600_000, 25, share);
   const expected = Math.round(pFail * failLoss * 10) / 10;
   const chain: ExplainInput[] = [
     {
@@ -492,19 +545,19 @@ function detectEquipment(ctx: DetectContext, id: string): Draft | null {
         repaints: 0,
         directCost: cfg.money.robotService,
         risk: level === 'высокий' ? 'средний' : 'низкий',
-        riskText: `До ночи робот сделает ещё ~${num(Math.round(((plantMs(nightDate, 0) - now) / 3600_000) * 15 * (16 / 24)))} циклов`,
-        workOrder: { action: 'maintenance', area: 'weld', equipmentId: id, title: `Плановое ТО ${name} ночью`, scheduledAt: toPlantIso(nightAt), durationMin: 30 },
+        riskText: `До ночи робот сделает ещё ~${num(Math.round(((plantMs(nightDate, 0) - now) / 3600_000) * 15 * modelShare * (16 / 24)))} циклов`,
+        workOrder: { action: 'maintenance', area, equipmentId: id, title: `Плановое ТО ${name} ночью`, scheduledAt: toPlantIso(nightAt), durationMin: 30 },
       },
       {
         id: 'service_now',
         title: 'ТО сейчас, 30 минут',
-        detail: 'Риск снимается сразу, но сварка встанет посреди смены.',
-        carsLost: projectedStopLoss(ctx, 'weld', now + 10 * 60_000, 30),
+        detail: `Риск снимается сразу, но ${share < 1 ? 'станция' : (stage?.short ?? 'участок').toLowerCase()} встанет посреди смены.`,
+        carsLost: projectedStopLoss(ctx, area, now + 10 * 60_000, 30, share),
         repaints: 0,
         directCost: cfg.money.robotService,
         risk: 'низкий',
         riskText: 'Потеря выпуска, если буферы малы',
-        workOrder: { action: 'maintenance', area: 'weld', equipmentId: id, title: `Плановое ТО ${name} сейчас`, scheduledAt: toPlantIso(now + 10 * 60_000), durationMin: 30 },
+        workOrder: { action: 'maintenance', area, equipmentId: id, title: `Плановое ТО ${name} сейчас`, scheduledAt: toPlantIso(now + 10 * 60_000), durationMin: 30 },
       },
       {
         id: 'postpone',
@@ -523,7 +576,7 @@ function detectEquipment(ctx: DetectContext, id: string): Draft | null {
   return {
     key: `equipment:${id}`,
     type: 'equipment',
-    area: 'weld',
+    area,
     equipmentId: id,
     tone: 'maintenance',
     title: `${name}: ресурс до ТО ${Math.max(0, Math.round((1 - ratio) * 100))}%`,
@@ -566,25 +619,33 @@ function detectStock(ctx: DetectContext, kitId: string): Draft | null {
   const outAt = addWorkTime(now, s.shiftsLeft * 8 * 60);
   const shiftEnd = shiftEndOf(outAt);
   const lossMin = Math.min(8 * 60, Math.max(0, (shiftEnd - outAt) / 60_000));
-  const loss = Math.round(lossMin / cfg.taktMin);
+  const firstLine = state.plant.production[0] ? dedicatedStation(state.plant.production[0], kit.model) : undefined;
+  // встаёт только линия модели — теряем её долю тактов; иначе — весь выпуск
+  const loss = Math.round((lossMin / cfg.taktMin) * (firstLine ? shareOf(state, kit.model) : 1));
   const today = plantParts(now).date === plantParts(outAt).date;
   // поставка может прийти раньше: если запас кончится не сегодня, ожидаемая потеря — треть
   const expectedLoss = today ? loss : Math.round(loss * 0.3);
   const when = today ? `около ${hm(outAt)}` : `${ddmm(outAt)} около ${hm(outAt)}`;
   const tomorrowNoon = plantMs(addDays(plantParts(now).date, 1), 12 * 60);
+  const firstStage = state.plant.production[0];
+  const warehouse = state.plant.warehouseIn?.id ?? 'warehouse';
+  // машинокомплект выдают на сварку: без него встаёт линия модели (если она под эту модель)
+  const line = firstStage ? dedicatedStation(firstStage, kit.model) : undefined;
+  const stops = line ? `${line.name.toLowerCase().replace(/^линия/, 'сварочная линия')}` : `выпуск ${model.short}`;
+  const others = MODELS.filter((m) => m.id !== kit.model).map((m) => m.short).join(' и ');
   const options = finalizeOptions(
     ctx,
     [
       {
         id: 'resequence',
         title: `Переставить очередь: ${model.short} — после поставки`,
-        detail: `Сварка запускает Onix и Cobalt вместо ${model.short}; ${model.short} догоняем после прихода комплектов.`,
+        detail: `${firstStage?.short ?? 'Сварка'} запускает ${others} вместо ${model.short}; ${model.short} догоняем после прихода комплектов.`,
         carsLost: 0,
         repaints: 0,
         directCost: 0,
         risk: 'средний',
         riskText: `План по ${model.short} сдвигается на 1–2 дня`,
-        workOrder: { action: 'resequence', area: 'weld', title: `Перестановка очереди: ${model.short} после поставки комплектов`, scheduledAt: toPlantIso(now), params: { model: kit.model, untilMs: tomorrowNoon } },
+        workOrder: { action: 'resequence', area: firstStage?.id ?? 'weld', title: `Перестановка очереди: ${model.short} после поставки комплектов`, scheduledAt: toPlantIso(now), params: { model: kit.model, untilMs: tomorrowNoon } },
       },
       {
         id: 'express_delivery',
@@ -595,17 +656,17 @@ function detectStock(ctx: DetectContext, kitId: string): Draft | null {
         directCost: cfg.money.expressDelivery,
         risk: 'средний',
         riskText: 'Зависит от поставщика',
-        workOrder: { action: 'expedite_parts', area: 'warehouse', title: `Срочная доставка: ${kit.name}`, scheduledAt: toPlantIso(now + 4 * 3600_000), params: { kitId } },
+        workOrder: { action: 'expedite_parts', area: warehouse, title: `Срочная доставка: ${kit.name}`, scheduledAt: toPlantIso(now + 4 * 3600_000), params: { kitId } },
       },
       {
         id: 'do_nothing',
         title: 'Ничего не делать',
-        detail: `Когда ${kit.name.toLowerCase()} закончатся (${when}), сборка встанет на кузове ${model.short}.`,
+        detail: `Когда ${kit.name.toLowerCase()} закончатся (${when}), ${stops} встанет: машинокомплект ${model.short} не выдать.`,
         carsLost: expectedLoss,
         repaints: 0,
         directCost: 0,
         risk: 'высокий',
-        riskText: 'Остановка сборки',
+        riskText: line ? `Остановка линии ${model.short}` : `Остановка выпуска ${model.short}`,
         workOrder: null,
       },
     ],
@@ -614,7 +675,7 @@ function detectStock(ctx: DetectContext, kitId: string): Draft | null {
   return {
     key: `stock:${kitId}`,
     type: 'stock',
-    area: 'warehouse',
+    area: warehouse,
     tone: 'attention',
     title: `${model.short}: ${kit.name.replace(` ${model.short}`, '').toLowerCase()} на ${num1(s.shiftsLeft)} смены`,
     impactText: today ? `−${cars(loss)} сегодня, если не переставить очередь` : `закончатся ${when}`,
@@ -628,10 +689,10 @@ function detectStock(ctx: DetectContext, kitId: string): Draft | null {
       ],
       chart: null,
     },
-    threat: { text: `Если поставка не придёт раньше, сборка встанет ${when}: не выпустим около ${cars(loss)}.`, carsLost: expectedLoss, repaints: 0, money: expectedLoss * cfg.money.carMargin },
+    threat: { text: `Если поставка не придёт раньше, ${stops} встанет ${when}: не выпустим около ${cars(loss)}.`, carsLost: expectedLoss, repaints: 0, money: expectedLoss * cfg.money.carMargin },
     options,
     explain: {
-      rule: 'Остаток комплектов из 1С:WMS делим на плановый расход за смену (доля модели в плане × 120). Меньше двух смен — инцидент.',
+      rule: 'Остаток комплектов из 1С:WMS делим на плановый расход за смену (доля модели в плане × 120). Меньше двух смен — инцидент. Машинокомплект выдают на сварку целиком: без любой позиции линия модели не начнёт новый кузов.',
       inputs: [
         { label: 'Остаток', value: `${num(s.qty)} шт.`, source: 'wms' },
         { label: 'Расход за смену', value: `${num(cfg.shiftPlan * shareOf(state, kit.model))} шт.`, source: 'erp' },
@@ -645,10 +706,13 @@ function detectStock(ctx: DetectContext, kitId: string): Draft | null {
   };
 }
 
-function detectEarlyWarning(ctx: DetectContext): Draft | null {
+function detectEarlyWarning(ctx: DetectContext, drive: PlantEquipment): Draft | null {
   const { state, now, cfg } = ctx;
-  const cur = state.series('CONV-03', 'motor_current_a');
-  const vib = state.series('CONV-03', 'vibration_mm_s');
+  const id = drive.id;
+  const area = drive.stageId;
+  const gen = inflect(drive.name, 'gen');
+  const cur = state.series(id, 'motor_current_a');
+  const vib = state.series(id, 'vibration_mm_s');
   if (!cur || cur.ts.length < 20) return null;
   const recent = window(cur, now - 10 * 60_000, now).filter((v) => v > 5);
   const base = window(cur, now - 3 * 3600_000, now - 60 * 60_000).filter((v) => v > 5);
@@ -658,23 +722,23 @@ function detectEarlyWarning(ctx: DetectContext): Draft | null {
   const vRecent = vib ? window(vib, now - 10 * 60_000, now).filter((v) => v > 0.5) : [];
   const vAvg = vRecent.length ? vRecent.reduce((a, b) => a + b, 0) / vRecent.length : 0;
   if (avg < baseline + 1.8 && vAvg < 3.3) return null;
-  if (ctx.evals.assembly?.status === 'fault') return null;
-  const loss = projectedStopLoss(ctx, 'assembly', now + 40 * 60_000, 55);
-  const inspectLoss = projectedStopLoss(ctx, 'assembly', now + 10 * 60_000, 20);
+  if (ctx.evals[area]?.status === 'fault') return null;
+  const loss = projectedStopLoss(ctx, area, now + 40 * 60_000, 55);
+  const inspectLoss = projectedStopLoss(ctx, area, now + 10 * 60_000, 20);
   const chain: ExplainInput[] = [
-    { label: 'Датчик тока привода Конвейера-03', value: `${num1(avg)} А при обычных ${num1(baseline)} А`, source: 'plc' },
+    { label: `Датчик тока привода ${gen}`, value: `${num1(avg)} А при обычных ${num1(baseline)} А`, source: 'plc' },
     { label: 'Датчик вибрации привода', value: vAvg ? `${num1(vAvg)} мм/с (обычно ~2,1)` : 'нет данных', source: 'plc' },
   ];
   return {
-    key: 'early:CONV-03',
+    key: `early:${id}`,
     type: 'early_warning',
-    area: 'assembly',
-    equipmentId: 'CONV-03',
+    area,
+    equipmentId: id,
     tone: 'attention',
-    title: 'Конвейер-03: растёт ток привода',
+    title: `${drive.name}: растёт ток привода`,
     impactText: `риск обрыва цепи — около ${cars(loss)}`,
     impactCars: loss * 0.6,
-    happened: { text: `Ток привода Конвейера-03 вырос до ${num1(avg)} А (обычно ${num1(baseline)} А), растёт вибрация`, at: now },
+    happened: { text: `Ток привода ${gen} вырос до ${num1(avg)} А (обычно ${num1(baseline)} А), растёт вибрация`, at: now },
     why: {
       text: 'Так ведёт себя изношенная или перетянутая приводная цепь: нагрузка на двигатель растёт за 30–60 минут до обрыва. Эти датчики ставятся на ступени 2.',
       chain,
@@ -693,7 +757,7 @@ function detectEarlyWarning(ctx: DetectContext): Draft | null {
           directCost: 60_000,
           risk: 'низкий',
           riskText: 'Короткая плановая остановка',
-          workOrder: { action: 'inspect', area: 'assembly', equipmentId: 'CONV-03', title: 'Осмотр и замена звеньев цепи Конвейера-03', scheduledAt: toPlantIso(now + 10 * 60_000), durationMin: 20 },
+          workOrder: { action: 'inspect', area, equipmentId: id, title: `Осмотр и замена звеньев цепи ${gen}`, scheduledAt: toPlantIso(now + 10 * 60_000), durationMin: 20 },
         },
         {
           id: 'do_nothing',
@@ -716,7 +780,7 @@ function detectEarlyWarning(ctx: DetectContext): Draft | null {
       conclusion: 'Риск обрыва цепи в ближайший час — высокий',
       assumptions: ['Пороги заданы правилом; в пилоте уточняются по истории обрывов.'],
     },
-    signals: [{ source: 'plc', ts: now, equipmentId: 'CONV-03', text: `Датчик тока привода: ${num1(avg)} А` }],
+    signals: [{ source: 'plc', ts: now, equipmentId: id, text: `Датчик тока привода: ${num1(avg)} А` }],
     since: now,
   };
 }
@@ -746,15 +810,17 @@ export class IncidentBook {
       const i = this.byKey.get(key);
       return !!i && i.status !== 'resolved';
     };
-    for (const area of ['weld', 'paint', 'assembly'] as const) {
-      const d = detectQuality(ctx, area, isOpen(`quality:${area}`));
+    const plant = ctx.state.plant;
+    for (const stage of qualityStages(plant)) {
+      const d = detectQuality(ctx, stage.id, isOpen(`quality:${stage.id}`));
       if (d) drafts.push(d);
     }
-    for (const area of ['weld', 'paint', 'assembly', 'qc'] as const) {
-      const d = detectStop(ctx, area);
+    for (const stage of plant.production) {
+      const d = detectStop(ctx, stage.id);
       if (d) drafts.push(d);
     }
-    for (const e of EQUIPMENT) {
+    for (const e of plant.equipment) {
+      if (e.passive) continue;
       const d = detectEquipment(ctx, e.id);
       if (d) drafts.push(d);
     }
@@ -762,8 +828,10 @@ export class IncidentBook {
       const d = detectStock(ctx, k.id);
       if (d) drafts.push(d);
     }
-    const ew = detectEarlyWarning(ctx);
-    if (ew) drafts.push(ew);
+    for (const drive of driveEquipment(plant)) {
+      const ew = detectEarlyWarning(ctx, drive);
+      if (ew) drafts.push(ew);
+    }
 
     const seen = new Set<string>();
     for (const d of drafts) {
@@ -898,4 +966,4 @@ function thin<T>(arr: T[], max: number): T[] {
   return out;
 }
 
-export { BUFFERS, capitalize, plural };
+export { capitalize, plural };

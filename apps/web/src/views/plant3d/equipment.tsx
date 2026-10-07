@@ -3,9 +3,9 @@
 import { useMemo, useRef } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { Instance, Instances } from '@react-three/drei';
-import { Color, DoubleSide, MeshStandardMaterial, type Group } from 'three';
-import { POSTS, type AreaId, type Tone } from '@allur/contracts/ref';
-import { FLOOR_Y, ZONE_DEPTH, type EquipmentPlace, type PlantLayout } from './layout';
+import { Color, DoubleSide, MeshBasicMaterial, MeshStandardMaterial, type Group } from 'three';
+import type { AreaId, Tone } from '@allur/contracts/ref';
+import { FLOOR_Y, type EquipmentPlace, type PlantLayout } from './layout';
 import type { Palette } from './palette';
 import type { EquipmentView } from './useSceneData';
 import { damp, requestAmbient } from './ticker';
@@ -17,7 +17,7 @@ export interface Mats {
   opening: MeshStandardMaterial;
 }
 
-export type HoverTarget = { kind: 'zone'; id: AreaId } | { kind: 'equipment'; id: string } | { kind: 'buffer'; id: string } | { kind: 'sensor'; id: string };
+export type HoverTarget = { kind: 'zone'; id: AreaId } | { kind: 'equipment'; id: string } | { kind: 'buffer'; id: string } | { kind: 'sensor'; id: string } | { kind: 'body'; id: string };
 
 export function useMaterials(p: Palette): Mats {
   return useMemo(
@@ -68,7 +68,7 @@ export function EquipmentModel(props: ModelProps) {
   const { place, view, mats, palette, layout, live, reducedMotion, onHover, onPick } = props;
   const status = live ? (view?.status ?? null) : null;
   let model: React.ReactNode;
-  switch (place.kind) {
+  switch (place.model) {
     case 'robot':
       model = <Robot place={place} mats={mats} animate={status === 'run' && !reducedMotion} />;
       break;
@@ -93,6 +93,29 @@ export function EquipmentModel(props: ModelProps) {
     case 'track':
       model = <Track place={place} mats={mats} />;
       break;
+    case 'laser_cell':
+      model = <LaserCell place={place} mats={mats} />;
+      break;
+    case 'weld_finish':
+      model = <WeldFinish place={place} mats={mats} />;
+      break;
+    case 'geometry_lab':
+      model = <GeometryLab place={place} mats={mats} />;
+      break;
+    case 'sealer':
+      model = <Sealer place={place} mats={mats} />;
+      break;
+    case 'paint_inspection':
+      model = <LightTunnel place={place} mats={mats} />;
+      break;
+    case 'polishing':
+      model = <PolishingBay place={place} mats={mats} />;
+      break;
+    case 'test_line':
+      model = <TestLine place={place} mats={mats} layout={layout} />;
+      break;
+    default:
+      model = <GenericUnit place={place} mats={mats} />;
   }
   const tone: Tone | null = status === 'fault' ? 'fault' : status === 'maintenance' ? 'maintenance' : null;
   return (
@@ -262,9 +285,9 @@ function Conveyor({ place, mats, layout }: { place: EquipmentPlace; mats: Mats; 
   const [x0, x1] = place.span ?? [place.x - 3, place.x + 3];
   const len = x1 - x0;
   const cx = (x0 + x1) / 2;
-  const posts = useMemo(() => POSTS.filter((p) => p.equipmentId === place.id).map((p) => layout.postSpots[p.id]!.x), [place.id, layout]);
+  const posts = useMemo(() => place.posts.map((id) => layout.postSpots[id]?.x).filter((x): x is number => x !== undefined), [place.posts, layout]);
   return (
-    <group position-y={FLOOR_Y}>
+    <group position={[0, FLOOR_Y, place.z]}>
       <mesh position={[cx, 0.35, 0]} material={mats.dark}>
         <boxGeometry args={[len, 0.3, 2.6]} />
       </mesh>
@@ -329,10 +352,10 @@ function RainBooth({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
   );
 }
 
-/** Выезд на полигон: дорога с линии назад, за пределы цеха */
+/** Выезд на полигон: дорога с линии за край зоны и дальше, за пределы цеха (машины — выборочно) */
 function Track({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
   const from = 2;
-  const to = -ZONE_DEPTH / 2 - 7;
+  const to = place.z - 8;
   return (
     <group position={[place.x, FLOOR_Y + 0.01, 0]}>
       <mesh position={[0, 0, (from + to) / 2]} rotation-x={-Math.PI / 2} material={mats.dark}>
@@ -345,9 +368,236 @@ function Track({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
   );
 }
 
+/** Опора робота без анимации — для ячеек, где роботов много (лазерная ячейка, герметизация) */
+function RobotStub({ x, z, facing, mats }: { x: number; z: number; facing: 1 | -1; mats: Mats }) {
+  return (
+    <group position={[x, 0, z]} rotation-y={facing > 0 ? 0 : Math.PI}>
+      <mesh position-y={0.3} material={mats.dark}>
+        <cylinderGeometry args={[0.38, 0.44, 0.6, 14]} />
+      </mesh>
+      <mesh position={[0, 1.15, 0.15]} rotation-x={0.35} material={mats.solid}>
+        <boxGeometry args={[0.26, 1.4, 0.26]} />
+      </mesh>
+      <mesh position={[0, 1.75, 0.75]} material={mats.solid}>
+        <boxGeometry args={[0.22, 0.22, 1.1]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Лазерная ячейка крыши: закрытый бокс с полупрозрачными стенами, внутри 8 роботов */
+function LaserCell({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  const xs = [-2.7, -0.9, 0.9, 2.7];
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      <mesh position-y={1.7} material={mats.glass}>
+        <boxGeometry args={[8.2, 3.4, 6.8]} />
+      </mesh>
+      <mesh position-y={3.46} material={mats.solid}>
+        <boxGeometry args={[8.5, 0.14, 7.1]} />
+      </mesh>
+      {xs.flatMap((x) => [
+        <RobotStub key={`${x}a`} x={x} z={-2.7} facing={1} mats={mats} />,
+        <RobotStub key={`${x}b`} x={x} z={2.7} facing={-1} mats={mats} />,
+      ])}
+    </group>
+  );
+}
+
+/** Рихтовка и доводка: две площадки рабочих по бокам и светильник над кузовом */
+function WeldFinish({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      {[-2.4, 2.4].map((z) => (
+        <mesh key={z} position={[0, 0.25, z]} material={mats.dark}>
+          <boxGeometry args={[4.2, 0.5, 1.1]} />
+        </mesh>
+      ))}
+      {[-2.9, 2.9].map((z) => (
+        <mesh key={z} position={[-1.9, 1.4, z]} material={mats.solid}>
+          <boxGeometry args={[0.2, 2.8, 0.2]} />
+        </mesh>
+      ))}
+      <mesh position={[-1.9, 2.8, 0]} material={mats.solid}>
+        <boxGeometry args={[0.5, 0.2, 6]} />
+      </mesh>
+      <mesh position={[1.6, 0.5, -2.4]} material={mats.solid}>
+        <boxGeometry args={[0.8, 1, 0.6]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Лаборатория геометрии: комната со стеклянным фасадом и мостовой измерительной машиной */
+function GeometryLab({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      <mesh position-y={0.04} material={mats.dark}>
+        <boxGeometry args={[7.6, 0.08, 6.4]} />
+      </mesh>
+      <mesh position-y={1.55} material={mats.glass}>
+        <boxGeometry args={[7.6, 3.1, 6.4]} />
+      </mesh>
+      <mesh position-y={3.14} material={mats.solid}>
+        <boxGeometry args={[7.9, 0.12, 6.7]} />
+      </mesh>
+      {[-2.6, 2.6].map((z) => (
+        <mesh key={z} position={[0, 0.5, z]} material={mats.solid}>
+          <boxGeometry args={[6.6, 0.2, 0.3]} />
+        </mesh>
+      ))}
+      <mesh position={[-0.8, 2.3, 0]} material={mats.solid}>
+        <boxGeometry args={[0.35, 0.35, 5.6]} />
+      </mesh>
+      {[-2.6, 2.6].map((z) => (
+        <mesh key={z} position={[-0.8, 1.4, z]} material={mats.solid}>
+          <boxGeometry args={[0.3, 1.8, 0.3]} />
+        </mesh>
+      ))}
+      <mesh position={[-0.8, 1.6, 0.8]} material={mats.dark}>
+        <boxGeometry args={[0.16, 1.2, 0.16]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Герметизация швов: закрытая кабина с двумя роботами нанесения мастики */
+function Sealer({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      <mesh position-y={1.5} material={mats.glass}>
+        <boxGeometry args={[5.6, 3, 4.6]} />
+      </mesh>
+      <mesh position-y={3.06} material={mats.dark}>
+        <boxGeometry args={[5.9, 0.14, 4.9]} />
+      </mesh>
+      <RobotStub x={0} z={-1.9} facing={1} mats={mats} />
+      <RobotStub x={0} z={1.9} facing={-1} mats={mats} />
+    </group>
+  );
+}
+
+/** Контроль покрытия: световой туннель — рама с яркими панелями по бокам и сверху */
+function LightTunnel({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  const light = useMemo(() => new MeshBasicMaterial({ color: '#ffffff' }), []);
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      {[-1.6, 1.6].map((x) => (
+        <group key={x} position-x={x}>
+          {[-2.5, 2.5].map((z) => (
+            <mesh key={z} position={[0, 1.6, z]} material={mats.solid}>
+              <boxGeometry args={[0.25, 3.2, 0.25]} />
+            </mesh>
+          ))}
+          <mesh position={[0, 3.25, 0]} material={mats.solid}>
+            <boxGeometry args={[0.25, 0.25, 5.25]} />
+          </mesh>
+        </group>
+      ))}
+      {[-2.42, 2.42].map((z) => (
+        <mesh key={z} position={[0, 1.7, z]} rotation-y={z < 0 ? 0 : Math.PI} material={light}>
+          <planeGeometry args={[3, 1.8]} />
+        </mesh>
+      ))}
+      <mesh position={[0, 3.12, 0]} rotation-x={Math.PI / 2} material={light}>
+        <planeGeometry args={[3, 4.6]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Полировка: открытая площадка в стороне от линии со светильниками на стойках */
+function PolishingBay({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      <mesh position-y={0.02} rotation-x={-Math.PI / 2} material={mats.opening}>
+        <planeGeometry args={[4.8, 4.6]} />
+      </mesh>
+      {[-2.2, 2.2].map((x) => (
+        <group key={x} position-x={x}>
+          <mesh position-y={1.2} material={mats.solid}>
+            <boxGeometry args={[0.16, 2.4, 0.16]} />
+          </mesh>
+          <mesh position={[0, 2.45, 0]} material={mats.dark}>
+            <boxGeometry args={[0.5, 0.18, 1.8]} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/** Испытательная линия: роликовый стенд, стенд развал-схождения, экран настройки фар — по постам */
+function TestLine({ place, mats, layout }: { place: EquipmentPlace; mats: Mats; layout: PlantLayout }) {
+  const xs = place.posts.map((id) => layout.postSpots[id]?.x).filter((x): x is number => x !== undefined);
+  const [rollers, align, lamps] = xs;
+  return (
+    <group position={[0, FLOOR_Y, place.z]}>
+      {rollers !== undefined && (
+        <group position-x={rollers}>
+          <mesh position-y={0.01} rotation-x={-Math.PI / 2} material={mats.opening}>
+            <planeGeometry args={[4.4, 2.4]} />
+          </mesh>
+          {[-1.3, 1.3].flatMap((dx) =>
+            [-0.18, 0.18].map((d) => (
+              <mesh key={`${dx}${d}`} position={[dx + d, 0.12, 0]} rotation-x={Math.PI / 2} material={mats.dark}>
+                <cylinderGeometry args={[0.14, 0.14, 2.2, 12]} />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 0.9, -2.6]} material={mats.solid}>
+            <boxGeometry args={[1, 1.8, 0.5]} />
+          </mesh>
+        </group>
+      )}
+      {align !== undefined && (
+        <group position-x={align}>
+          {[-1.3, 1.3].flatMap((dx) =>
+            [-1.5, 1.5].map((dz) => (
+              <mesh key={`${dx}${dz}`} position={[dx, 0.45, dz]} material={mats.dark}>
+                <boxGeometry args={[0.6, 0.6, 0.08]} />
+              </mesh>
+            )),
+          )}
+          <mesh position={[2.1, 1.1, -2.6]} material={mats.solid}>
+            <boxGeometry args={[0.2, 2.2, 0.2]} />
+          </mesh>
+          <mesh position={[2.1, 2.1, -2.45]} material={mats.dark}>
+            <boxGeometry args={[1, 0.7, 0.08]} />
+          </mesh>
+        </group>
+      )}
+      {lamps !== undefined && (
+        <group position-x={lamps}>
+          <mesh position={[2.3, 1, 0]} material={mats.solid}>
+            <boxGeometry args={[0.12, 1.6, 3.2]} />
+          </mesh>
+          <mesh position={[0.4, 0.6, 0]} material={mats.dark}>
+            <boxGeometry args={[0.5, 1.2, 0.5]} />
+          </mesh>
+        </group>
+      )}
+    </group>
+  );
+}
+
+/** Оборудование без своей модели: корпус по высоте из каталога */
+function GenericUnit({ place, mats }: { place: EquipmentPlace; mats: Mats }) {
+  return (
+    <group position={[place.x, FLOOR_Y, place.z]}>
+      <mesh position-y={place.height / 2} material={mats.solid}>
+        <boxGeometry args={[3.6, place.height, 3.6]} />
+      </mesh>
+      <mesh position-y={place.height + 0.06} material={mats.dark}>
+        <boxGeometry args={[3.8, 0.12, 3.8]} />
+      </mesh>
+    </group>
+  );
+}
+
 /** Склад комплектующих: стеллаж и стопки контейнеров — высота стопки по запасу (1С:WMS) */
 export function WarehouseContent({ layout, stock, mats, palette }: { layout: PlantLayout; stock: Record<string, number | null>; mats: Mats; palette: Palette }) {
-  const z = layout.zones.warehouse;
+  const z = layout.zones[layout.warehouseId ?? ''];
   const boxes = useMemo(() => {
     const out: { key: string; pos: [number, number, number]; color: Color }[] = [];
     for (const k of layout.kitSpots) {
@@ -360,6 +610,7 @@ export function WarehouseContent({ layout, stock, mats, palette }: { layout: Pla
     }
     return out;
   }, [layout, stock, palette]);
+  if (!z) return null;
   return (
     <group>
       <Rack x0={z.x0 + 0.8} x1={z.x1 - 0.8} zc={z.z0 + 1.6} mats={mats} />
@@ -376,11 +627,12 @@ export function WarehouseContent({ layout, stock, mats, palette }: { layout: Pla
 
 /** Склад готовой продукции: стеллаж и разметка мест стоянки */
 export function FinishedContent({ layout, mats }: { layout: PlantLayout; mats: Mats }) {
-  const z = layout.zones.finished;
+  const z = layout.zones[layout.finishedId ?? ''];
+  if (!z) return null;
   return (
     <group>
       <Rack x0={z.x0 + 0.8} x1={z.x1 - 0.8} zc={z.z0 + 1.6} mats={mats} />
-      {layout.segSpots.finished.map((s, i) => (
+      {(layout.segSpots[layout.finishedId!] ?? []).map((s, i) => (
         <mesh key={i} position={[s.x, FLOOR_Y + 0.006, s.z]} rotation-x={-Math.PI / 2}>
           <planeGeometry args={[2.3, 4.8]} />
           <meshBasicMaterial color="#ffffff" transparent opacity={0.7} />

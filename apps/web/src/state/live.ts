@@ -1,6 +1,7 @@
 // Живое состояние из WebSocket /ws: снимок двойника, лента входящих, источники.
 import { create } from 'zustand';
-import type { FeedItem, LiveSnapshot, ServerMessage, SourceStatus } from '@allur/contracts/ref';
+import type { BodyView, FeedItem, LiveSnapshot, ServerMessage, SourceStatus } from '@allur/contracts/ref';
+import { setConnections, setPlantConfig } from './plant';
 
 type Conn = 'connecting' | 'open' | 'closed';
 
@@ -10,6 +11,8 @@ interface LiveState {
   snapshot: LiveSnapshot | null;
   feed: FeedItem[];
   sources: SourceStatus[];
+  /** Кузова в цехе по трекеру двойника (раз в секунду) */
+  bodies: BodyView[];
   lastMessageAt: number;
 }
 
@@ -19,16 +22,20 @@ export const useLive = create<LiveState>(() => ({
   snapshot: null,
   feed: [],
   sources: [],
+  bodies: [],
   lastMessageAt: 0,
 }));
 
 let socket: WebSocket | null = null;
 let retry = 0;
+/** Первая лента после подключения — последние сообщения целиком; дальше приходят только новые */
+let feedFresh = true;
 
 export function connectLive() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   socket = new WebSocket(`${proto}://${location.host}/ws`);
+  feedFresh = true;
   useLive.setState({ conn: 'connecting' });
   socket.onopen = () => {
     retry = 0;
@@ -44,11 +51,25 @@ export function connectLive() {
       case 'booting':
         useLive.setState({ booting: msg.message, lastMessageAt: now });
         break;
-      case 'feed':
-        useLive.setState((s) => ({ feed: [...s.feed, ...msg.items].slice(-200), lastMessageAt: now }));
+      case 'feed': {
+        // начальная лента и первая рассылка после подключения могут пересекаться — без повторов
+        const base = feedFresh ? [] : useLive.getState().feed;
+        feedFresh = false;
+        const seen = new Set(base.map((f) => f.id));
+        useLive.setState({ feed: [...base, ...msg.items.filter((f) => !seen.has(f.id))].slice(-200), lastMessageAt: now });
         break;
+      }
       case 'sources':
         useLive.setState({ sources: msg.items, lastMessageAt: now });
+        break;
+      case 'plant':
+        setPlantConfig(msg.config);
+        break;
+      case 'connections':
+        setConnections(msg.items);
+        break;
+      case 'bodies':
+        useLive.setState({ bodies: msg.items });
         break;
     }
   };

@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import type { AreaId, LiveSnapshot } from '@allur/contracts/ref';
 import { api } from './client';
 import type { AreaDetail, QualityOverview } from './types';
-import { paintDefectLive } from '../state/selectors';
+import { paintDefectLive, paintStageId } from '../state/selectors';
+import { usePlantModel } from '../state/plant';
 
 /** Детали участка: оборудование, сигналы, график по часам (тот же кэш, что у боковой панели) */
 export function useAreaDetail(area: AreaId | null) {
@@ -17,7 +18,8 @@ export function useAreaDetail(area: AreaId | null) {
 
 /** Брак окраски за смену: из снимка, если окраска худшая, иначе из обзора качества */
 export function usePaintDefect(s: LiveSnapshot): number | null {
-  const live = paintDefectLive(s);
+  const paintId = paintStageId(usePlantModel());
+  const live = paintDefectLive(s, paintId);
   const q = useQuery({
     queryKey: ['quality'],
     queryFn: () => api<QualityOverview>('/api/v1/quality'),
@@ -25,5 +27,5 @@ export function usePaintDefect(s: LiveSnapshot): number | null {
     enabled: live === null,
   });
   if (live !== null) return live;
-  return q.data?.areas.find((a) => a.area === 'paint')?.shiftPct ?? null;
+  return q.data?.areas.find((a) => a.area === paintId)?.shiftPct ?? null;
 }

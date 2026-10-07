@@ -69,9 +69,12 @@ curl -X POST http://localhost:3000/api/v1/import/csv \
 |---|---|
 | `allur/kst/{area}/{equipmentId}/state` | `{ "status": "run" \| "idle" \| "fault" \| "maintenance", "code": "E-2117", "text": "Обрыв приводной цепи", "ts": "…" }` |
 | `allur/kst/{area}/{equipmentId}/counter` | `{ "cycles": 5641, "total": 48213, "ts": "…" }` |
-| `allur/kst/{area}/{equipmentId}/telemetry` | `{ "metric": "filter_dp_pa" \| "motor_current_a" \| "vibration_mm_s", "value": 312, "ts": "…" }` |
+| `allur/kst/{area}/{equipmentId}/telemetry` | `{ "metric": "filter_dp_pa" \| "motor_current_a" \| "vibration_mm_s" \| "temperature_c" \| "pressure_bar" \| "torque_nm", "value": 312, "ts": "…" }` |
+| `allur/kst/{area}/{equipmentId}/heartbeat` | `{ "status": "run", "ts": "…" }` — пульс связи раз в 10–30 с. Событием цеха не становится, по нему двойник показывает статус «Подключено». |
 
-`area`: `warehouse | weld | paint | assembly | qc | finished`. Коды оборудования — из справочника (`packages/contracts/src/plant.ts`): `ABB-01…ABB-04`, `BOOTH-01`, `BOOTH-02`, `CONV-03` и т.д. `clientId` клиента рекомендуется начинать с `plc-`, тогда двойник показывает, что контроллеры подключены.
+Коды участков (`area`) и оборудования берутся из конфигурации завода: `GET /api/v1/plant/config`, исходный состав — `packages/contracts/src/plant-seed.ts`. В исходном составе участки — `warehouse | weld | paint | assembly | qc | finished`, оборудование — `ABB-01…ABB-04`, `BOOTH-01`, `BOOTH-02`, `CONV-03` и т.д. Сообщение от оборудования, которого нет в текущей версии конфигурации, отклоняется с причиной.
+
+`clientId` клиента рекомендуется начинать с `plc-`, тогда двойник показывает, что контроллеры подключены.
 
 ```bash
 # Пример с mosquitto_pub
@@ -80,6 +83,23 @@ mosquitto_pub -h localhost -p 1883 -i plc-test -t 'allur/kst/paint/BOOTH-02/tele
 ```
 
 В облаке, где открыт только порт HTTPS, используйте MQTT поверх WebSocket: `wss://<хост>/mqtt`.
+
+## Отслеживание кузова
+
+Двойник знает, где каждый кузов, по четырём событиям (схемы — в Swagger `/docs`, примеры — `packages/contracts/examples`):
+
+| Событие | Откуда | Что значит |
+|---|---|---|
+| `production_order` | 1С:ERP/MES, REST | Заказ на кузов: внутренний номер `bodyId`, модель, комплектация, код и название цвета. Точный состав выгрузки уточняется с заводом |
+| `body_checkpoint` | 1С:MES (REST), RFID и ПЛК (MQTT `allur/kst/{area}/{checkpointId}/checkpoint`), мастер | Кузов прошёл точку отметки: `in` — пришёл, `out` — ушёл |
+| `operation_result` | робот, инструмент поста (MQTT `allur/kst/{area}/{equipmentId}/operation`) | Операция по кузову выполнена (`ok`) или нет (`nok`) |
+| `vin_assigned` | 1С:MES | На кузов нанесён VIN — дальше двойник ведёт кузов и по номеру, и по VIN |
+
+Точки отметки задаются в конфигурации завода: у участка — на входе и выходе, у станции и у оборудования — свои (`idPoints`, `idPoint`). Способы: `mes_scan` — сканер 1С:MES (ступень 0), `rfid` — метка тележки, `plc_tracking` — трекинг ПЛК конвейера, `tool_result` — инструмент поста (ступень 1), `manual` — мастер. На ступени 0 положение известно до участка, место на участке двойник оценивает по норме времени и честно помечает это как оценку; с RFID и ПЛК — до станции.
+
+Грязные данные: пропущенная отметка достраивается по маршруту и помечается в паспорте; отметка не по порядку не применяется и попадает в «Противоречия в данных»; повтор той же отметки в течение минуты не учитывается; повторный законный проход (перекраска) открывает маршрут участка заново. Прежний формат `post_passed` по-прежнему принимается — двойник переводит проход поста в отметку.
+
+Кузова для интерфейса: `GET /api/v1/bodies` и `GET /api/v1/bodies/{id}` (номер или VIN), по WebSocket — сообщение `bodies` раз в секунду.
 
 ## Камеры (ступень 1)
 
@@ -98,6 +118,26 @@ RTSP-поток камеры поста → видеоаналитика: сво
 ## Наряды от двойника
 
 Когда руководитель принимает решение, двойник публикует наряд в `allur/kst/twin/work-orders` (пример: `packages/contracts/examples/mqtt/work_order.json`). В реальном внедрении наряд забирает 1С:ТОиР или MES. Это делается подпиской на топик или HTTP-вебхуком, который настраивается в шлюзе.
+
+## Конфигурация завода и подключение оборудования
+
+Состав цеха хранится версиями. Каждое применение или откат создаёт новую версию, ошибки проверки возвращаются по-русски (`400 validation_failed`).
+
+| Запрос | Назначение |
+|---|---|
+| `GET /api/v1/plant/config` | текущая версия с живыми статусами подключения оборудования |
+| `PUT /api/v1/plant/config` | проверить и применить новый состав |
+| `GET /api/v1/plant/config/versions` | история версий: кто, когда, что изменил |
+| `POST /api/v1/plant/config/validate` | проверить состав без применения |
+| `POST /api/v1/plant/config/preview-impact` | список изменений и мощность участков до и после, узкое место |
+| `POST /api/v1/plant/config/rollback/{ver}` | вернуть прежнюю версию (новой версией) |
+| `GET /api/v1/plant/config/export`, `POST /api/v1/plant/config/import` | выгрузить или загрузить состав файлом JSON |
+| `POST /api/v1/equipment/{id}/connection/test` | проверить подключение: имитатор отвечает реальными значениями, для OPC UA, Modbus TCP, S7 и SCADA проверяется адрес |
+| `PUT /api/v1/equipment/{id}/connection` | сохранить способ подключения |
+
+О новой версии двойник сообщает:
+- в MQTT — retained-сообщением `allur/kst/twin/plant-config` с телом `{ "version": 2, "updatedAt": "…" }`;
+- интерфейсу — по WebSocket `/ws` сообщением `{ "t": "plant", "config": … }`.
 
 ## Порты и переменные окружения шлюза
 

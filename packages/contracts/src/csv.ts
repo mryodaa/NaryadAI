@@ -1,9 +1,10 @@
 // Импорт выданных таблиц из CSV: определяем вид таблицы по заголовкам, разделитель — «;», «,» или табуляция,
 // десятичная запятая допустима. Результат — канонические события с source = import.
 import type { CanonicalEvent, ValidationIssue } from './events';
-import { areaFromName, equipmentFromName, modelFromName, type ModelId } from './plant';
+import { modelFromName, type ModelId } from './plant';
+import { SEED_MODEL, equipmentFromNameIn, type PlantModel } from './plant-model';
 import { normalizeDate, plantMs, toPlantIso } from './time';
-import { qualityRowsToEvents, shiftReportRowsToEvents } from './rest';
+import { areaOfName, qualityRowsToEvents, shiftReportRowsToEvents } from './rest';
 
 export type CsvKind = 'shift_reports' | 'downtimes' | 'quality' | 'plan';
 
@@ -52,7 +53,7 @@ function toNumber(s: string | undefined): number | null {
 
 const norm = (h: string) => h.toLowerCase().replace(/[^а-яёa-z%]/g, '');
 
-export function parseCsvTable(text: string, nowMs: number, month = '2026-10'): CsvImport {
+export function parseCsvTable(text: string, nowMs: number, month = '2026-10', model: PlantModel = SEED_MODEL): CsvImport {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim().length > 0);
   const result: CsvImport = { kind: null, kindLabel: 'не распознана', rows: 0, events: [], issues: [] };
   if (lines.length < 2) {
@@ -85,7 +86,7 @@ export function parseCsvTable(text: string, nowMs: number, month = '2026-10'): C
       if (plan === null || fact === null) return result.issues.push({ row: row + 2, path: 'План/Факт', message: 'Не число' });
       parsed.push({ date: r[iDate] ?? '', line: r[iLine] ?? '', plan, fact, hours, load });
     });
-    const conv = shiftReportRowsToEvents(parsed, 'import', nowMs);
+    const conv = shiftReportRowsToEvents(parsed, 'import', nowMs, model);
     result.events.push(...conv.events);
     result.issues.push(...conv.issues.map((i) => ({ ...i, row: i.row + 2 })));
   } else if (has('оборудование', 'equipment') && has('причина', 'reason')) {
@@ -97,19 +98,19 @@ export function parseCsvTable(text: string, nowMs: number, month = '2026-10'): C
     // В таблице нет времени начала — ставим условно с 10:00, чтобы простои попали в первую смену
     rows.forEach((r, row) => {
       const date = normalizeDate(r[iDate] ?? '');
-      const area = areaFromName(r[iArea] ?? '');
-      const eq = equipmentFromName(r[iEq] ?? '');
+      const area = areaOfName(model, r[iArea] ?? '');
+      const eq = equipmentFromNameIn(model, r[iEq] ?? '');
       const mins = toNumber(r[iMin]);
       const reason = r[iReason] ?? '';
       if (!date) return result.issues.push({ row: row + 2, path: 'Дата', message: `Не понял дату «${r[iDate]}»` });
-      if (!eq) return result.issues.push({ row: row + 2, path: 'Оборудование', message: `Нет в справочнике: «${r[iEq]}»` });
+      if (!eq) return result.issues.push({ row: row + 2, path: 'Оборудование', message: `Нет в конфигурации завода: «${r[iEq]}»` });
       if (mins === null) return result.issues.push({ row: row + 2, path: 'Мин', message: 'Не число' });
       const from = plantMs(date, 10 * 60 + row * 5);
       result.events.push({
         eventId: `import:dt:${date}:${eq.id}:${reason}`,
         source: 'import',
         ts: toPlantIso(nowMs),
-        area: area ?? eq.area,
+        area: area ?? eq.stageId,
         equipmentId: eq.id,
         type: 'downtime_registered',
         payload: {
@@ -134,7 +135,7 @@ export function parseCsvTable(text: string, nowMs: number, month = '2026-10'): C
       if (produced === null || defects === null) return result.issues.push({ row: row + 2, path: 'Выпущено/Брак', message: 'Не число' });
       parsed.push({ date: r[iDate] ?? '', area: r[iArea] ?? '', produced, defects, pct: iPct >= 0 ? (toNumber(r[iPct]) ?? undefined) : undefined });
     });
-    const conv = qualityRowsToEvents(parsed, 'import', nowMs);
+    const conv = qualityRowsToEvents(parsed, 'import', nowMs, model);
     result.events.push(...conv.events);
     result.issues.push(...conv.issues.map((i) => ({ ...i, row: i.row + 2 })));
   } else if (has('модель', 'model') && has('план', 'plan')) {

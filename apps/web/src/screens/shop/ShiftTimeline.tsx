@@ -1,11 +1,10 @@
 // Лента смены: шкала 8 часов, отрезки простоев и точки инцидентов по участкам, «сейчас» — линия.
-import type { AreaId, LiveSnapshot, ShiftView } from '@allur/contracts/ref';
-import { AREA_BY_ID } from '@allur/contracts/ref';
+import type { LiveSnapshot, ShiftView } from '@allur/contracts/ref';
 import { Card } from '../../components/ui';
+import { usePlantModel } from '../../state/plant';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { timeHM } from '../../lib/format';
 
-const ROWS: AreaId[] = ['weld', 'paint', 'assembly', 'qc'];
 const HOUR = 3_600_000;
 
 export function ShiftTimeline({
@@ -19,6 +18,8 @@ export function ShiftTimeline({
   timeline: LiveSnapshot['timeline'];
   onIncident?: (id: string) => void;
 }) {
+  // строки ленты — производственные участки по потоку
+  const rows = usePlantModel().production;
   const start = Date.parse(shift.startsAt);
   const end = Date.parse(shift.endsAt);
   const nowMs = Math.min(end, Math.max(start, Date.parse(now)));
@@ -41,8 +42,8 @@ export function ShiftTimeline({
           ))}
         </div>
 
-        {ROWS.map((area) => (
-          <Row key={area} area={area}>
+        {rows.map(({ id: area, short }) => (
+          <Row key={area} label={short}>
             <div className="absolute inset-0 rounded bg-surface-2" />
             <div className="absolute inset-y-0 right-0 rounded-r bg-[repeating-linear-gradient(135deg,transparent_0_6px,var(--line)_6px_7px)]" style={{ left: pos(nowMs) }} />
             {timeline.segments
@@ -94,10 +95,10 @@ export function ShiftTimeline({
   );
 }
 
-function Row({ area, children }: { area: AreaId; children: React.ReactNode }) {
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
-      <div className="text-[0.9375rem] leading-5 text-ink-2">{AREA_BY_ID[area].short}</div>
+      <div className="text-[0.9375rem] leading-5 text-ink-2">{label}</div>
       <div className="relative h-5">{children}</div>
     </>
   );

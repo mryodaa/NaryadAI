@@ -3,21 +3,21 @@
 import { memo, useMemo, useRef, type RefObject } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Grid, Html, Line } from '@react-three/drei';
-import { Color, MeshStandardMaterial, Object3D, type InstancedMesh } from 'three';
+import { Color, MeshBasicMaterial, MeshStandardMaterial, Object3D, type InstancedMesh } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { Activity, Clock, Video, Wrench } from 'lucide-react';
-import { AREA_BY_ID, CAMERAS, type AreaId, type BufferView, type Tone } from '@allur/contracts/ref';
-import { FLOW } from '../../state/selectors';
+import { CAMERAS, MODEL_BY_ID, type AreaId, type BufferView, type Tone } from '@allur/contracts/ref';
 import { openIncident } from '../../state/view';
 import { TONE_CLASS, TONE_ICON, cx } from '../../lib/tones';
-import { BODY, FLOOR_Y, PRODUCING, type PlantLayout, type Rect } from './layout';
+import { BODY, FLOOR_Y, type PlantLayout, type Rect } from './layout';
 import type { Palette } from './palette';
-import type { FlowModel } from './flow';
+import type { BodyFlow } from './flow';
+import { bodyTint } from './bodyLook';
 import type { Plaque, SceneData } from './useSceneData';
 import { EquipmentModel, FinishedContent, GhostFader, WarehouseContent, useMaterials, type HoverTarget } from './equipment';
 import { damp, requestAmbient } from './ticker';
 
-const MAX_BODIES = 90;
+const MAX_BODIES = 160;
 /** Слои подписей: плашки поверх подписей зон, всё — ниже плавающих панелей интерфейса */
 const Z_LABEL: [number, number] = [20, 10];
 const Z_PLAQUE: [number, number] = [40, 21];
@@ -30,7 +30,7 @@ export interface SceneProps {
   data: SceneData;
   buffers: BufferView[];
   stage: 0 | 1 | 2;
-  flow: FlowModel;
+  flow: BodyFlow;
   focusArea: AreaId | null;
   reducedMotion: boolean;
   /** Постоянный слой для подписей поверх холста: подписи не пересоздаются при старте сцены */
@@ -72,13 +72,13 @@ export function Scene(props: SceneProps) {
       />
       {/* разметка проходов вдоль линии */}
       {[-1, 1].map((s) => (
-        <mesh key={s} position={[midX, 0.008, s * (layout.zones.weld.z1 + 1.3)]} rotation-x={-Math.PI / 2}>
+        <mesh key={s} position={[midX, 0.008, s * (layout.bounds.z1 + 1.3)]} rotation-x={-Math.PI / 2}>
           <planeGeometry args={[width + 8, 0.34]} />
           <meshBasicMaterial color={palette.aisle} />
         </mesh>
       ))}
 
-      {FLOW.map((area, i) => (
+      {layout.stages.map(({ id: area }, i) => (
         <Zone
           key={area}
           id={area}
@@ -96,6 +96,9 @@ export function Scene(props: SceneProps) {
           onPick={onPick}
         />
       ))}
+
+      <LaneMarkings layout={layout} palette={palette} />
+      <LaneLabels layout={layout} focusArea={focusArea} portal={portal} />
 
       {props.buffers.map((buf) => (
         <BufferPad key={buf.id} rect={layout.buffers[buf.id]} buf={buf} palette={palette} portal={portal} onHover={onHover} />
@@ -119,7 +122,7 @@ export function Scene(props: SceneProps) {
       <WarehouseContent layout={layout} stock={data.stock} mats={mats} palette={palette} />
       <FinishedContent layout={layout} mats={mats} />
 
-      <Bodies flow={flow} palette={palette} />
+      <Bodies flow={flow} onHover={onHover} />
       {props.vinPath && <VinPath layout={layout} posts={props.vinPath.posts} />}
 
       <Plaques layout={layout} data={data} portal={portal} />
@@ -274,6 +277,76 @@ function Zone({
 }
 
 // ---------------------------------------------------------------------------
+// Разметка полос на полу: линии расходятся с общего входа и сходятся в общий выход участка
+
+const MARK = 0.3;
+
+function LaneMarkings({ layout, palette }: { layout: PlantLayout; palette: Palette }) {
+  const strips = useMemo(() => {
+    const out: { key: string; x: number; z: number; w: number; d: number }[] = [];
+    const hx = (key: string, x0: number, x1: number, z: number) => x1 > x0 && out.push({ key, x: (x0 + x1) / 2, z, w: x1 - x0, d: MARK });
+    const vz = (key: string, x: number, z0: number, z1: number) => z1 > z0 && out.push({ key, x, z: (z0 + z1) / 2, w: MARK, d: z1 - z0 + MARK });
+    for (const [area, pipe] of Object.entries(layout.pipes)) {
+      if (pipe.lanes.length < 2) continue;
+      const zs = pipe.lanes.map((l) => l.z);
+      const split = pipe.inlet.length ? pipe.lanes[0]!.x0 - 0.6 : null;
+      const merge = Math.max(...pipe.lanes.map((l) => l.x1)) + 0.6;
+      for (const l of pipe.lanes) hx(`${area}-${l.stationId}`, split ?? l.entry.x, merge, l.z);
+      vz(`${area}-merge`, merge, Math.min(...zs), Math.max(...zs));
+      if (split !== null) vz(`${area}-split`, split, Math.min(...zs), Math.max(...zs));
+      const out0 = pipe.outlet[0];
+      if (out0) hx(`${area}-out`, merge, out0.x, 0);
+    }
+    return out;
+  }, [layout]);
+  const material = useMemo(() => new MeshBasicMaterial({ color: palette.aisle }), [palette]);
+  return (
+    <group position-y={FLOOR_Y + 0.006}>
+      {strips.map((st) => (
+        <mesh key={st.key} position={[st.x, 0, st.z]} rotation-x={-Math.PI / 2} material={material}>
+          <planeGeometry args={[st.w, st.d]} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Подписи полос участка с параллельными станциями: «Onix», «Cobalt», «J7» у входа каждой линии
+
+function LaneLabels({ layout, focusArea, portal }: { layout: PlantLayout; focusArea: AreaId | null; portal: Portal }) {
+  const items = useMemo(
+    () =>
+      Object.entries(layout.pipes).flatMap(([area, pipe]) =>
+        pipe.lanes.length < 2
+          ? []
+          : pipe.lanes.map((l) => ({
+              key: `${area}-${l.stationId}`,
+              area,
+              // линия под одну модель — подписываем моделью, иначе — названием станции
+              text: l.models?.length === 1 ? MODEL_BY_ID[l.models[0]!].short : l.name,
+              title: `${l.name}${l.models ? ` — ${l.models.map((m) => MODEL_BY_ID[m].name).join(', ')}` : ''}`,
+              at: [l.x0 - 2.2, 0.5, l.z] as [number, number, number],
+            })),
+      ),
+    [layout],
+  );
+  return (
+    <>
+      {items.map((it) =>
+        focusArea !== null && focusArea !== it.area ? null : (
+          <Html key={it.key} portal={portal as never} position={it.at} center zIndexRange={Z_LABEL} pointerEvents="none">
+            <span title={it.title} className="select-none whitespace-nowrap rounded-md bg-surface/95 px-1.5 py-0.5 text-sm font-semibold text-ink-2 shadow-card ring-1 ring-line">
+              {it.text}
+            </span>
+          </Html>
+        ),
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Буфер между участками: площадка и число кузовов — те же цифры, что в «Панели»
 
 function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: BufferView; palette: Palette; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
@@ -340,7 +413,7 @@ function VinPath({ layout, posts }: { layout: PlantLayout; posts: string[] }) {
   const points = useMemo(() => {
     const pts: [number, number, number][] = [];
     for (const id of posts) {
-      const s = layout.postSpots[id] ?? (id === 'FG-IN' ? layout.segSpots.finished[0] : undefined);
+      const s = layout.postSpots[id] ?? (layout.finishPosts.includes(id) && layout.finishedId ? layout.segSpots[layout.finishedId]?.[0] : undefined);
       if (!s) continue;
       const last = pts[pts.length - 1];
       if (last && Math.abs(last[2] - s.z) > 0.5 && Math.abs(last[0] - s.x) > 0.5) pts.push([Math.abs(last[2]) < 0.5 ? s.x : last[0], 0.7, Math.abs(last[2]) < 0.5 ? last[2] : s.z]);
@@ -362,30 +435,51 @@ function VinPath({ layout, posts }: { layout: PlantLayout; posts: string[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Кузова: один InstancedMesh, нейтральный серый (цвет в сцене — только статусы)
+// Кузова: один InstancedMesh, у каждого экземпляра свой цвет — вид кузова по выполненным операциям
+// (голый металл, катафорез, грунт, цвет заказа); машинокомплект на складе — низкая паллета
 
-function Bodies({ flow, palette }: { flow: FlowModel; palette: Palette }) {
+function Bodies({ flow, onHover }: { flow: BodyFlow; onHover: (t: HoverTarget | null) => void }) {
   const ref = useRef<InstancedMesh>(null);
   const geometry = useMemo(() => new RoundedBoxGeometry(BODY.length, BODY.height, BODY.width, 2, 0.42), []);
-  const material = useMemo(() => new MeshStandardMaterial({ color: palette.body, roughness: 0.6 }), [palette]);
+  const material = useMemo(() => new MeshStandardMaterial({ color: '#ffffff', roughness: 0.55, metalness: 0.1 }), []);
   const dummy = useMemo(() => new Object3D(), []);
+  const tint = useMemo(() => new Color(), []);
   useFrame((state) => {
     const mesh = ref.current;
     if (!mesh) return;
-    const { count, moving } = flow.frame(performance.now(), (i, x, z, rot, s) => {
+    const { count, moving } = flow.frame(performance.now(), (i, x, z, rot, s, view) => {
       if (i >= MAX_BODIES) return;
       const k = Math.max(0.001, s);
-      dummy.position.set(x, FLOOR_Y + (BODY.height / 2) * k, z);
+      const kit = view.loc.kind === 'warehouse';
+      const h = kit ? 0.55 : BODY.height;
+      dummy.position.set(x, FLOOR_Y + (h / 2) * k, z);
       dummy.rotation.set(0, rot, 0);
-      dummy.scale.setScalar(k);
+      if (kit) dummy.scale.set(0.62 * k, 0.4 * k, 0.75 * k);
+      else dummy.scale.setScalar(k);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, bodyTint(view, tint));
     });
     mesh.count = Math.min(count, MAX_BODIES);
     mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (moving) state.invalidate();
   });
-  return <instancedMesh ref={ref} args={[geometry, material, MAX_BODIES]} frustumCulled={false} />;
+  return (
+    <instancedMesh
+      ref={ref}
+      args={[geometry, material, MAX_BODIES]}
+      frustumCulled={false}
+      onPointerMove={(e: ThreeEvent<PointerEvent>) => {
+        if (e.instanceId === undefined) return;
+        const id = flow.idAt(e.instanceId);
+        if (!id) return;
+        e.stopPropagation();
+        onHover({ kind: 'body', id });
+      }}
+      onPointerOut={() => onHover(null)}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -399,8 +493,9 @@ function anchorOf(layout: PlantLayout, area: AreaId, equipmentId: string | undef
 }
 
 /** Коротко, как в ТЗ: «Брак 10,0% и растёт», «ABB-04: ресурс до ТО 6%» — участок и так подписан над зоной */
-function shortTitle(p: Plaque): string {
-  const names = [AREA_BY_ID[p.area].short, AREA_BY_ID[p.area].name];
+function shortTitle(p: Plaque, layout: PlantLayout): string {
+  const n = layout.names[p.area];
+  const names = n ? [n.short, n.name] : [];
   let t = p.title;
   for (const n of names) {
     for (const prefix of [`${n} стоит: `, `${n}: `]) if (t.startsWith(prefix)) t = t.slice(prefix.length);
@@ -441,7 +536,7 @@ function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneDat
                 )}
               >
                 <Icon className={cx('size-4 shrink-0', TONE_CLASS[it.p.tone].ink)} strokeWidth={2.25} aria-hidden />
-                <span className="truncate">{shortTitle(it.p)}</span>
+                <span className="truncate">{shortTitle(it.p, layout)}</span>
               </button>
             </Html>
           );
@@ -472,7 +567,7 @@ function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneDat
 function CameraIcons({ layout, portal }: { layout: PlantLayout; portal: Portal }) {
   return (
     <>
-      {PRODUCING.map((area) => {
+      {layout.producing.map((area) => {
         const cam = CAMERAS.find((c) => c.area === area);
         if (!cam) return null;
         const r = layout.zones[area];
@@ -494,7 +589,7 @@ function SensorBadges({ layout, data, portal, onHover }: { layout: PlantLayout; 
       {data.sensors.map((s) => {
         const e = layout.equipment.find((x) => x.id === s.equipmentId);
         if (!e) return null;
-        const at: [number, number, number] = e.kind === 'conveyor' ? [(e.span?.[0] ?? e.x) + 0.9, 2.6, -2.4] : [e.x, FLOOR_Y + 4.3, e.z + 2.5];
+        const at: [number, number, number] = e.model === 'conveyor' ? [(e.span?.[0] ?? e.x) + 0.9, 2.6, -2.4] : [e.x, FLOOR_Y + 4.3, e.z + 2.5];
         return (
           <Html key={s.equipmentId} portal={portal as never} position={at} center zIndexRange={Z_PLAQUE}>
             <span

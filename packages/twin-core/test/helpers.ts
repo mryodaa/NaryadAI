@@ -1,6 +1,7 @@
 // Конструкторы событий для тестов: время — «HH:MM» 7 октября 2026 (завод, UTC+5).
 import { makeVin, plantMs, toPlantIso, type AreaId, type CanonicalEvent, type ModelId } from '@allur/contracts';
 import { Twin } from '../src/twin';
+import { LEGACY_PLANT } from './legacy-plant';
 
 export const DAY = '2026-10-07';
 export const at = (hhmm: string, date = DAY) => {
@@ -14,6 +15,8 @@ const id = (p: string) => `${p}-${++seq}`;
 
 const AREA_OF: Record<string, AreaId> = {
   WELD: 'weld',
+  GEO: 'weld',
+  POLISH: 'paint',
   PAINT: 'paint',
   ASM: 'assembly',
   QC: 'qc',
@@ -80,7 +83,7 @@ export function plan(month = '2026-10', target = 5500): CanonicalEvent {
 
 /** Двойник со стартом прогона в 08:00 7 октября */
 export function newTwin(): Twin {
-  const t = new Twin();
+  const t = new Twin({}, LEGACY_PLANT);
   t.reset(at('07:59'));
   return t;
 }

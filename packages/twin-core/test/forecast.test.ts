@@ -87,7 +87,7 @@ describe('причина брака: связь с перепадом на фи�
       const ts = at('12:00') + m * 60_000;
       t.ingest(telemetry('BOOTH-02', 'paint', 'filter_dp_pa', 40 + 200 * Math.exp(m / 180), ts));
     }
-    const f = filterForecast(t.state, at('13:30'), cfg)!;
+    const f = filterForecast(t.state, at('13:30'), cfg, 'BOOTH-02')!;
     const expectedHours = 3 * Math.log(410 / 200) - 1.5;
     expect((f.limitAt! - at('13:30')) / 3600_000).toBeCloseTo(expectedHours, 1);
   });

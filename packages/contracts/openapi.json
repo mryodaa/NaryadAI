@@ -25,6 +25,10 @@
       "description": "Чтение состояния, прогнозов, инцидентов и принятие решений"
     },
     {
+      "name": "Конфигурация завода",
+      "description": "Состав цеха: участки по потоку, параллельные станции, оборудование и его подключение. Каждое применение — новая версия, откат возможен. После применения двойник, интерфейс (WebSocket, сообщение plant) и имитаторы (MQTT allur/kst/twin/plant-config) перестраиваются без перезапуска."
+    },
+    {
       "name": "Демо",
       "description": "Управление демонстрацией. В реальном внедрении не используется"
     }
@@ -536,6 +540,61 @@
         }
       }
     },
+    "/api/v1/bodies": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Кузова в цехе: где каждый, сколько на месте против нормы, вид по выполненным операциям, флаги",
+        "description": "Положение — по отметкам кузова (body_checkpoint): до станции, если её отмечают RFID или ПЛК, иначе — до участка с оценкой по норме времени.",
+        "responses": {
+          "200": {
+            "description": "Список кузовов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bodies/{id}": {
+      "get": {
+        "tags": [
+          "Двойник"
+        ],
+        "summary": "Кузов по номеру или VIN: маршрут операций, история отметок, восстановленные отметки и петли перекраски",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Номер кузова (B-04812) или VIN"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Кузов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Кузов не найден"
+          }
+        }
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "tags": [
@@ -605,6 +664,360 @@
           },
           "404": {
             "description": "Инцидент или вариант не найден"
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config": {
+      "get": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Текущая применённая конфигурация (с живым состоянием связи)",
+        "responses": {
+          "200": {
+            "description": "Конфигурация",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlantConfig"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Применить новую версию",
+        "description": "Проверяет и применяет. Версию, время и автора ставит шлюз. Нельзя удалить оборудование, по которому открыт инцидент.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConfigInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Применено: новая версия и список изменений",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/versions": {
+      "get": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "История версий",
+        "responses": {
+          "200": {
+            "description": "Версии, новые сверху",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/validate": {
+      "post": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Проверка без применения",
+        "description": "Ошибки (нельзя применить) и предупреждения — по-русски, с путём к участку, станции или оборудованию.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConfigInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог проверки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlantValidation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/preview-impact": {
+      "post": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Влияние изменений без применения",
+        "description": "Изменения человеческим языком, пропускная способность участков до и после, узкое место.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConfigInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Влияние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlantImpact"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/rollback/{ver}": {
+      "post": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Откат к версии",
+        "description": "Создаёт новую версию — копию указанной. История остаётся линейной.",
+        "parameters": [
+          {
+            "name": "ver",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Откат применён",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Версии нет в истории"
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/export": {
+      "get": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Выгрузить текущую конфигурацию в JSON",
+        "responses": {
+          "200": {
+            "description": "Файл plant-config-vN.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlantConfig"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plant/config/import": {
+      "post": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Загрузить конфигурацию из JSON и применить",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConfigInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Применено",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/equipment/{id}/connection/test": {
+      "post": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Проверка подключения оборудования",
+        "description": "Имитатор (демо) опрашивается по-настоящему и возвращает живые значения. Для OPC UA, Modbus, S7 и SCADA — проверка адреса и попытка TCP-подключения с таймаутом; успешное подключение к несуществующему устройству не изображается.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EquipmentCode"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Итог проверки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Оборудования нет в применённой конфигурации"
+          }
+        }
+      }
+    },
+    "/api/v1/equipment/{id}/connection": {
+      "put": {
+        "tags": [
+          "Конфигурация завода"
+        ],
+        "summary": "Сохранить подключение оборудования",
+        "description": "Создаёт новую версию конфигурации. Статус «на связи» появится, когда по оборудованию реально придут данные.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EquipmentCode"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlantConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Сохранено",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ошибка валидации (сообщения по-русски)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Оборудования нет в применённой конфигурации"
           }
         }
       }
@@ -762,6 +1175,44 @@
           }
         }
       }
+    },
+    "/api/v1/demo/simulate-all": {
+      "post": {
+        "tags": [
+          "Демо"
+        ],
+        "summary": "Имитировать данные со всего оборудования, не дожидаясь подключения",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "on": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "on"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Состояние",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -776,15 +1227,11 @@
       },
       "AreaId": {
         "type": "string",
-        "enum": [
-          "warehouse",
-          "weld",
-          "paint",
-          "assembly",
-          "qc",
-          "finished"
-        ],
-        "description": "Участок: warehouse — склад комплектующих, weld — сварка, paint — окраска, assembly — сборка, qc — контроль качества (ОТК), finished — склад готовой продукции"
+        "pattern": "^[a-z][a-z0-9-]{0,31}$",
+        "description": "Код участка из конфигурации завода (GET /api/v1/plant/config). Исходный цех: warehouse — склад комплектующих, weld — сварка, paint — окраска, assembly — сборка, qc — контроль качества (ОТК), finished — склад готовой продукции. Шлюз отклоняет участки, которых нет в конфигурации",
+        "examples": [
+          "paint"
+        ]
       },
       "ModelId": {
         "type": "string",
@@ -830,7 +1277,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 64,
-        "description": "Код оборудования из справочника: ABB-01…ABB-04, PRETREAT, BOOTH-01, BOOTH-02, OVEN, CONV-03, QC-LINE, QC-TRACK, QC-RAIN"
+        "description": "Код оборудования из конфигурации завода. Исходный цех: роботы сварки ABB-01…ABB-11 и LASER-01 (три линии под модели), FINISH-01, GEO-LAB, PRETREAT, OVEN-ED, SEALER, PRIMER, BOOTH-01, BOOTH-02, OVEN, PAINT-INSP, POLISH, CONV-01…CONV-03, QC-TEST, QC-RAIN, QC-TRACK, QC-LINE"
       },
       "PostPassedEvent": {
         "type": "object",
@@ -867,7 +1314,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 64,
-                "description": "Код поста из справочника (WELD-1, PAINT-B2, ASM-3, QC-1, FG-IN…)"
+                "description": "Код поста из конфигурации завода (WELD-1, WELD-FIN, GEO-IN, PAINT-B2, ASM-3, QC-1, FG-IN…)"
               }
             },
             "required": [
@@ -928,7 +1375,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 64,
-                "description": "Контрольная точка: CP-WELD, CP-PAINT, CP-FINAL, CP-TRACK, CP-RAIN"
+                "description": "Контрольная точка: CP-WELD, CP-GEO, CP-PAINT, CP-TEST, CP-RAIN, CP-TRACK, CP-FINAL"
               },
               "defect": {
                 "type": "string",
@@ -1183,9 +1630,12 @@
         "enum": [
           "filter_dp_pa",
           "motor_current_a",
-          "vibration_mm_s"
+          "vibration_mm_s",
+          "temperature_c",
+          "pressure_bar",
+          "torque_nm"
         ],
-        "description": "filter_dp_pa — перепад давления на фильтре, Па; motor_current_a — ток привода, А; vibration_mm_s — вибрация, мм/с"
+        "description": "filter_dp_pa — перепад давления на фильтре, Па; motor_current_a — ток привода, А; vibration_mm_s — вибрация, мм/с; temperature_c — температура, °C; pressure_bar — давление, бар; torque_nm — момент затяжки, Н·м"
       },
       "TelemetryEvent": {
         "type": "object",
@@ -1619,6 +2069,267 @@
         ],
         "description": "Итог качества участка за смену или сутки (1С:QLS)"
       },
+      "BodyId": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_-]{2,31}$",
+        "description": "Внутренний номер кузова: присваивается в начале сварки, до нанесения VIN",
+        "examples": [
+          "B-04812"
+        ]
+      },
+      "ProductionOrderEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "production_order"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "bodyId": {
+                "$ref": "#/components/schemas/BodyId"
+              },
+              "model": {
+                "$ref": "#/components/schemas/ModelId"
+              },
+              "trim": {
+                "description": "Комплектация",
+                "type": "string",
+                "maxLength": 60
+              },
+              "colorCode": {
+                "description": "Код цвета из справочника 1С",
+                "type": "string",
+                "maxLength": 16
+              },
+              "colorName": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "plannedSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Порядковый номер в плане запуска"
+              }
+            },
+            "required": [
+              "bodyId",
+              "model",
+              "plannedSeq"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Производственный заказ на кузов (1С:ERP/MES): модель, комплектация, цвет. Точный состав выгрузки уточняется с заводом"
+      },
+      "BodyCheckpointEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "body_checkpoint"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "bodyId": {
+                "$ref": "#/components/schemas/BodyId"
+              },
+              "checkpointId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Код точки отметки из конфигурации завода (WELD-IN, RFID-BOOTH-02…)"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "in",
+                  "out"
+                ],
+                "description": "in — кузов пришёл, out — ушёл"
+              },
+              "postId": {
+                "description": "Позиция на конвейере (пост 1С:MES) — для трекинга ПЛК",
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "checkpointId",
+              "direction"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "type",
+          "payload"
+        ],
+        "description": "Отметка кузова в точке: сканер 1С:MES, RFID, трекинг ПЛК, мастер. Нужен bodyId или VIN"
+      },
+      "OperationResultEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "operation_result"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "bodyId": {
+                "$ref": "#/components/schemas/BodyId"
+              },
+              "operation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Код операции из каталога (weld_roof, basecoat, wheels…)"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "nok"
+                ]
+              },
+              "details": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "operation",
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "equipmentId",
+          "type",
+          "payload"
+        ],
+        "description": "Результат операции над кузовом от робота, инструмента поста или контрольного поста. Нужен bodyId или VIN"
+      },
+      "VinAssignedEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceId"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "area": {
+            "$ref": "#/components/schemas/AreaId"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/EquipmentId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "type": {
+            "type": "string",
+            "const": "vin_assigned"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "bodyId": {
+                "$ref": "#/components/schemas/BodyId"
+              }
+            },
+            "required": [
+              "bodyId"
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "source",
+          "ts",
+          "area",
+          "vin",
+          "type",
+          "payload"
+        ],
+        "description": "На кузов нанесён VIN: с этого момента номер кузова и VIN связаны"
+      },
       "CanonicalEvent": {
         "oneOf": [
           {
@@ -1653,6 +2364,18 @@
           },
           {
             "$ref": "#/components/schemas/QualitySummaryEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ProductionOrderEvent"
+          },
+          {
+            "$ref": "#/components/schemas/BodyCheckpointEvent"
+          },
+          {
+            "$ref": "#/components/schemas/OperationResultEvent"
+          },
+          {
+            "$ref": "#/components/schemas/VinAssignedEvent"
           }
         ],
         "description": "Каноническое событие двойника; поле type определяет состав payload"
@@ -1743,6 +2466,70 @@
           "kind"
         ],
         "description": "Детекция видеоаналитики"
+      },
+      "CheckpointPayload": {
+        "type": "object",
+        "properties": {
+          "bodyId": {
+            "$ref": "#/components/schemas/BodyId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "postId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "direction"
+        ],
+        "description": "Отметка кузова: номер кузова или VIN, направление, позиция на конвейере"
+      },
+      "OperationPayload": {
+        "type": "object",
+        "properties": {
+          "bodyId": {
+            "$ref": "#/components/schemas/BodyId"
+          },
+          "vin": {
+            "$ref": "#/components/schemas/Vin"
+          },
+          "operation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "nok"
+            ]
+          },
+          "details": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "ts": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "operation",
+          "result"
+        ],
+        "description": "Результат операции над кузовом"
       },
       "EventBatch": {
         "minItems": 1,
@@ -2135,6 +2922,10 @@
               "j7_kits",
               "abb04_service"
             ]
+          },
+          "simulateAll": {
+            "description": "Имитировать всё оборудование с выбранным способом подключения, как будто шлюз завода работает",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2147,6 +2938,57 @@
           "scenario"
         ],
         "description": "Часы демонстрации (только для имитаторов, не часть контракта интеграции)"
+      },
+      "SimProbeRequest": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "equipmentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "requestId",
+          "equipmentId"
+        ],
+        "description": "Опрос имитатора при проверке подключения (только демо)"
+      },
+      "SimProbeReply": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "ok"
+        ],
+        "description": "Ответ имитатора: текущие значения полей оборудования"
       },
       "WorkOrderAction": {
         "type": "string",
@@ -2219,9 +3061,1003 @@
           "issuedAt"
         ],
         "description": "Наряд от двойника в системы завода (в реальном внедрении — 1С:ТОиР или MES)"
+      },
+      "EquipmentCode": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}$",
+        "description": "Код оборудования, уникальный на заводе. Он же — сегмент MQTT-топика",
+        "examples": [
+          "BOOTH-02"
+        ]
+      },
+      "PostCode": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}$",
+        "description": "Код поста 1С:MES, где фиксируется проход кузова",
+        "examples": [
+          "PAINT-B2"
+        ]
+      },
+      "StageCode": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,31}$",
+        "description": "Код участка. Он же — поле area в событиях и сегмент MQTT-топика",
+        "examples": [
+          "paint"
+        ]
+      },
+      "StationCode": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+      },
+      "PlantConnection": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "opcua",
+              "modbus_tcp",
+              "s7",
+              "scada",
+              "retrofit_sensor",
+              "manual",
+              "simulator",
+              "none"
+            ],
+            "description": "opcua — OPC UA, modbus_tcp — Modbus TCP, s7 — Siemens S7, scada — система управления участком, retrofit_sensor — внешний датчик, manual — ручной ввод мастером, simulator — имитатор (демо), none — не подключено"
+          },
+          "endpoint": {
+            "description": "Адрес: opc.tcp://10.20.1.15:4840, 10.20.1.30 (Modbus, S7), идентификатор датчика",
+            "type": "string",
+            "maxLength": 300
+          },
+          "params": {
+            "description": "Параметры способа: режим безопасности OPC UA, порт и unit id Modbus, rack/slot S7",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "tagMap": {
+            "description": "Какой тег источника что означает для двойника",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "enum": [
+                "state",
+                "errorCode",
+                "cycleCounter",
+                "filterDpPa",
+                "motorCurrentA",
+                "vibrationMmS",
+                "temperatureC",
+                "pressureBar",
+                "torqueNm"
+              ]
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "status": {
+            "default": "not_connected",
+            "description": "Состояние связи. Считает шлюз по реальному потоку данных; при сохранении игнорируется",
+            "type": "string",
+            "enum": [
+              "not_connected",
+              "connecting",
+              "online",
+              "stale",
+              "error"
+            ]
+          },
+          "lastSeenAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "description": "Как оборудование подключено к двойнику"
+      },
+      "IdPointCode": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_-]{0,31}$",
+        "description": "Код точки отметки кузова — checkpointId в событиях body_checkpoint",
+        "examples": [
+          "PAINT-IN"
+        ]
+      },
+      "PlantIdPoint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IdPointCode"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "mes_scan",
+              "rfid",
+              "plc_tracking",
+              "tool_result",
+              "manual"
+            ],
+            "description": "mes_scan — сканер 1С:MES, rfid — RFID-метка тележки, plc_tracking — трекинг кузова в ПЛК конвейера, tool_result — результат инструмента поста, manual — отметка мастера"
+          },
+          "connection": {
+            "description": "Как точка подключена к двойнику (как у оборудования)",
+            "$ref": "#/components/schemas/PlantConnection"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "method"
+        ],
+        "description": "Точка отметки кузова: где система узнаёт, что кузов прошёл"
+      },
+      "PlantIdPoints": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/PlantIdPoint"
+          },
+          "exit": {
+            "$ref": "#/components/schemas/PlantIdPoint"
+          }
+        },
+        "description": "Точки отметки на входе и на выходе"
+      },
+      "PlantColor": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "hex": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "finish": {
+            "type": "string",
+            "enum": [
+              "solid",
+              "metallic",
+              "pearl"
+            ],
+            "description": "solid — без металлика, metallic — металлик, pearl — перламутр"
+          },
+          "models": {
+            "description": "Для каких моделей доступен; нет — для любых",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelId"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "hex",
+          "finish"
+        ],
+        "description": "Цвет кузова из справочника 1С: код из производственного заказа → название и оттенок"
+      },
+      "PlantEquipment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/EquipmentCode"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "spot_robot",
+              "laser_cell",
+              "weld_jig",
+              "pretreatment",
+              "paint_booth",
+              "paint_robot",
+              "oven",
+              "conveyor",
+              "assembly_post",
+              "nutrunner",
+              "inspection_post",
+              "geometry_station",
+              "rain_test",
+              "test_track",
+              "test_line",
+              "weld_finish",
+              "geometry_lab",
+              "sealer",
+              "primer_booth",
+              "paint_inspection",
+              "polishing",
+              "rack",
+              "container_zone",
+              "parking"
+            ],
+            "description": "Тип из каталога оборудования"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "critical": {
+            "type": "boolean",
+            "description": "Критичное: его простой останавливает поток и идёт в лимит 60 минут"
+          },
+          "cycleTimeSec": {
+            "description": "Норма цикла на кузов, с — если отличается от каталога",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 36000
+          },
+          "posts": {
+            "description": "Посты 1С:MES на этом оборудовании по порядку; нет — пост с кодом оборудования, если тип фиксирует проход",
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/PostCode"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 60
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ]
+            }
+          },
+          "aliases": {
+            "description": "Как оборудование называют в таблицах и журналах завода",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          "idPoint": {
+            "description": "Точка отметки кузова у оборудования: вход на него и выход с него (RFID, трекинг ПЛК)",
+            "$ref": "#/components/schemas/PlantIdPoint"
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PlantConnection"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "name",
+          "critical",
+          "connection"
+        ],
+        "description": "Единица оборудования"
+      },
+      "PlantStation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StationCode"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "models": {
+            "description": "Какие модели обрабатывает: сварочные линии привязаны к моделям, окраска и сборка универсальные. Нет поля — любые модели",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelId"
+            }
+          },
+          "idPoints": {
+            "description": "Точки отметки кузова на входе и выходе станции",
+            "$ref": "#/components/schemas/PlantIdPoints"
+          },
+          "equipment": {
+            "maxItems": 40,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantEquipment"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "equipment"
+        ],
+        "description": "Станция (линия) участка: кузов проходит её оборудование по порядку. Станции одного участка работают параллельно; кузов идёт на станцию своей модели"
+      },
+      "PlantStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StageCode"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "short": {
+            "description": "Короткое название для подписей: «ОТК», «Склад ГП»",
+            "type": "string",
+            "maxLength": 20
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "warehouse_in",
+              "welding",
+              "painting",
+              "assembly",
+              "inspection",
+              "warehouse_out",
+              "custom"
+            ],
+            "description": "Вид участка: склад комплектующих, сварка, окраска, сборка, контроль, склад готовой продукции, другой"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "models": {
+            "description": "Какие модели обрабатывает: сварочные линии привязаны к моделям, окраска и сборка универсальные. Нет поля — любые модели",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelId"
+            }
+          },
+          "idPoints": {
+            "description": "Точки отметки кузова на входе и выходе участка",
+            "$ref": "#/components/schemas/PlantIdPoints"
+          },
+          "bufferAfter": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "capacity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200
+                  }
+                },
+                "required": [
+                  "capacity"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Буфер до следующего участка, кузовов"
+          },
+          "inlet": {
+            "description": "Общее оборудование на входе участка: все кузова проходят его до станций (ванна подготовки)",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantEquipment"
+            }
+          },
+          "stations": {
+            "maxItems": 40,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantStation"
+            }
+          },
+          "outlet": {
+            "description": "Общее оборудование на выходе участка: все кузова проходят его после станций (сушильная печь)",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantEquipment"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "order",
+          "bufferAfter",
+          "stations"
+        ],
+        "description": "Участок завода"
+      },
+      "PlantConfig": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedBy": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "comment": {
+            "description": "Что изменилось в этой версии",
+            "type": "string",
+            "maxLength": 300
+          },
+          "stages": {
+            "minItems": 2,
+            "maxItems": 30,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantStage"
+            }
+          },
+          "colors": {
+            "description": "Справочник цветов кузова; нет — справочник по умолчанию",
+            "maxItems": 40,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantColor"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "updatedAt",
+          "updatedBy",
+          "stages"
+        ],
+        "description": "Конфигурация завода: участки по потоку слева направо, их станции и оборудование"
+      },
+      "PlantConfigInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedBy": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "comment": {
+            "description": "Что изменилось в этой версии",
+            "type": "string",
+            "maxLength": 300
+          },
+          "stages": {
+            "minItems": 2,
+            "maxItems": 30,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantStage"
+            }
+          },
+          "colors": {
+            "description": "Справочник цветов кузова; нет — справочник по умолчанию",
+            "maxItems": 40,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantColor"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "stages"
+        ],
+        "description": "Конфигурация завода для проверки или применения (версию и время ставит шлюз)"
+      },
+      "PlantConnectionInput": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "opcua",
+              "modbus_tcp",
+              "s7",
+              "scada",
+              "retrofit_sensor",
+              "manual",
+              "simulator",
+              "none"
+            ],
+            "description": "opcua — OPC UA, modbus_tcp — Modbus TCP, s7 — Siemens S7, scada — система управления участком, retrofit_sensor — внешний датчик, manual — ручной ввод мастером, simulator — имитатор (демо), none — не подключено"
+          },
+          "endpoint": {
+            "description": "Адрес: opc.tcp://10.20.1.15:4840, 10.20.1.30 (Modbus, S7), идентификатор датчика",
+            "type": "string",
+            "maxLength": 300
+          },
+          "params": {
+            "description": "Параметры способа: режим безопасности OPC UA, порт и unit id Modbus, rack/slot S7",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "tagMap": {
+            "description": "Какой тег источника что означает для двойника",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "enum": [
+                "state",
+                "errorCode",
+                "cycleCounter",
+                "filterDpPa",
+                "motorCurrentA",
+                "vibrationMmS",
+                "temperatureC",
+                "pressureBar",
+                "torqueNm"
+              ]
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "description": "Подключение оборудования: способ, адрес, параметры и сопоставление тегов"
+      },
+      "PlantIssue": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "stageId": {
+            "type": "string"
+          },
+          "stationId": {
+            "type": "string"
+          },
+          "equipmentId": {
+            "type": "string"
+          },
+          "incidentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "path",
+          "message"
+        ],
+        "description": "Ошибка или предупреждение проверки состава цеха — по-русски"
+      },
+      "PlantValidation": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantIssue"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlantIssue"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "errors",
+          "warnings"
+        ],
+        "description": "Итог проверки: ok — ошибок нет, можно применять"
+      },
+      "PlantVersionInfo": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "seed",
+              "apply",
+              "rollback",
+              "import",
+              "connection",
+              "demo"
+            ]
+          },
+          "stages": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "stations": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "equipment": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "createdAt",
+          "createdBy",
+          "comment",
+          "source",
+          "stages",
+          "stations",
+          "equipment",
+          "current"
+        ],
+        "description": "Версия конфигурации в истории"
+      },
+      "StageCapacity": {
+        "type": "object",
+        "properties": {
+          "stageId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "stations": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "nominalPerShift": {
+            "type": "number",
+            "description": "По норме цикла: сумма станций, но не больше общего оборудования"
+          },
+          "effectivePerShift": {
+            "type": "number",
+            "description": "С учётом простоев за 30 дней и перекраски"
+          },
+          "limitedBy": {
+            "description": "Что ограничивает участок, если не сумма станций",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "stageId",
+          "name",
+          "stations",
+          "nominalPerShift",
+          "effectivePerShift",
+          "limitedBy"
+        ],
+        "description": "Пропускная способность участка, кузовов в смену"
+      },
+      "PlantImpact": {
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Изменения человеческим языком: «+1 камера окраски»"
+          },
+          "before": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageCapacity"
+            }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageCapacity"
+            }
+          },
+          "bottleneckBefore": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "stageId": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stageId",
+                  "name"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bottleneckAfter": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "stageId": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stageId",
+                  "name"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "forecast": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "before": {
+                    "type": "number"
+                  },
+                  "after": {
+                    "type": "number"
+                  },
+                  "target": {
+                    "type": "number"
+                  },
+                  "gapBefore": {
+                    "type": "number"
+                  },
+                  "gapAfter": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "before",
+                  "after",
+                  "target",
+                  "gapBefore",
+                  "gapAfter"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Прогноз плана месяца до и после (P50)"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/PlantValidation"
+          }
+        },
+        "required": [
+          "changes",
+          "before",
+          "after",
+          "bottleneckBefore",
+          "bottleneckAfter",
+          "forecast",
+          "validation"
+        ],
+        "description": "Влияние изменений состава цеха — без применения"
+      },
+      "ConnectionTestResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "hint": {
+            "description": "Что сделать, если не получилось",
+            "type": "string"
+          },
+          "values": {
+            "description": "Живые значения тегов, если подключение удалось",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "enum": [
+                    "state",
+                    "errorCode",
+                    "cycleCounter",
+                    "filterDpPa",
+                    "motorCurrentA",
+                    "vibrationMmS",
+                    "temperatureC",
+                    "pressureBar",
+                    "torqueNm"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "label",
+                "tag",
+                "value"
+              ]
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "description": "Итог проверки подключения"
       }
     },
     "examples": {
+      "body_checkpoint": {
+        "value": {
+          "eventId": "mes-20261007-0001301",
+          "source": "mes",
+          "ts": "2026-10-07T13:36:40+05:00",
+          "area": "paint",
+          "vin": "KZACN1S13TK004815",
+          "type": "body_checkpoint",
+          "payload": {
+            "bodyId": "B-04815",
+            "checkpointId": "PAINT-IN",
+            "direction": "in"
+          }
+        }
+      },
       "camera_detection": {
         "value": {
           "eventId": "camera:CAM-ASM:line_stopped:2026-10-07T10:06:00+05:00",
@@ -2296,6 +4132,22 @@
           }
         }
       },
+      "operation_result": {
+        "value": {
+          "eventId": "plc-20261007-op-77120",
+          "source": "plc",
+          "ts": "2026-10-07T13:52:10+05:00",
+          "area": "paint",
+          "equipmentId": "BOOTH-01",
+          "vin": "KZACN1S13TK004815",
+          "type": "operation_result",
+          "payload": {
+            "bodyId": "B-04815",
+            "operation": "basecoat",
+            "result": "ok"
+          }
+        }
+      },
       "plan_set": {
         "value": {
           "eventId": "erp:plan:2026-10",
@@ -2335,6 +4187,23 @@
           "payload": {
             "model": "onix",
             "post": "PAINT-B2"
+          }
+        }
+      },
+      "production_order": {
+        "value": {
+          "eventId": "erp-20261007-004812",
+          "source": "erp",
+          "ts": "2026-10-07T07:40:00+05:00",
+          "area": "warehouse",
+          "type": "production_order",
+          "payload": {
+            "bodyId": "B-04812",
+            "model": "onix",
+            "trim": "LT",
+            "colorCode": "W01",
+            "colorName": "Белый",
+            "plannedSeq": 4812
           }
         }
       },
@@ -2396,6 +4265,19 @@
           "payload": {
             "metric": "filter_dp_pa",
             "value": 312
+          }
+        }
+      },
+      "vin_assigned": {
+        "value": {
+          "eventId": "mes-20261007-0001222",
+          "source": "mes",
+          "ts": "2026-10-07T12:58:00+05:00",
+          "area": "weld",
+          "vin": "KZACN1S13TK004815",
+          "type": "vin_assigned",
+          "payload": {
+            "bodyId": "B-04815"
           }
         }
       }

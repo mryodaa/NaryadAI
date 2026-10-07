@@ -1,5 +1,7 @@
 export { Twin, type SnapshotMeta, type DecisionResult } from './twin';
 export { TwinState } from './state';
+export { plantCapacity, type PlantCapacityView, type StageCapacityView } from './capacity';
+export { qualityStages, outputStage, inspectionPass, filterBooths, driveEquipment, stageStopped, workingStations } from './plant';
 export { DEFAULT_CONFIG, DEFAULT_MONEY, MONEY_LABELS, ASSUMPTIONS, type TwinConfig, type MoneyParams } from './config';
 export { evaluateArea, bufferCounts, type AreaEval, type Signal } from './status';
 export { shiftKpis, stopIntervals, criticalDowntimeToday, unaccountedLosses } from './kpi';

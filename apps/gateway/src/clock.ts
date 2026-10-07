@@ -18,6 +18,8 @@ export class DemoClock {
   stage: Stage;
   speed: number;
   paused = false;
+  /** Имитировать всё оборудование с выбранным способом подключения, как будто шлюз завода работает */
+  simulateAll = false;
   /** Начало текущего прогона (всё, что раньше, — история) */
   runStartMs = DEMO_START_MS;
 
@@ -58,6 +60,11 @@ export class DemoClock {
     this.emit('stage');
   }
 
+  setSimulateAll(on: boolean) {
+    this.simulateAll = on;
+    this.emit('simulate-all');
+  }
+
   /**
    * Новый прогон: другой runId, то же зерно — сценарий повторяется одинаково.
    * Смена всегда начинается в 08:00; часы ставятся на момент сценария, а имитаторы
@@ -96,6 +103,7 @@ export class DemoClock {
       paused: this.paused,
       stage: this.stage,
       scenario: this.scenario,
+      simulateAll: this.simulateAll,
     };
   }
 

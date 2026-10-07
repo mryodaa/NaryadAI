@@ -1,15 +1,24 @@
 // Имитаторы систем завода. Каждый видит физический цех со своей стороны и говорит со шлюзом
 // на своём языке: 1С (MES, QLS, WMS) — пакетами событий по HTTP, контроллеры и камеры — по MQTT.
 import {
+  CAMERAS,
+  CANONICAL_FIELD_DEF,
+  ID_METHOD_DEF,
+  SEED_MODEL,
+  plantOperations,
   topics,
   toPlantIso,
   type AreaId,
   type CanonicalEvent,
+  type CanonicalField,
+  type IdPointRole,
+  type PlantModel,
+  type PlantPoint,
   type Stage,
 } from '@allur/contracts';
 import { CAL, MIN } from './calibration';
 import { Rng } from './rng';
-import type { DowntimeInfo, World, WorldEvent } from './world';
+import type { BodyRef, DowntimeInfo, World, WorldEvent } from './world';
 
 export interface Outbox {
   /** 1С и мобильный ввод: POST /api/v1/events */
@@ -18,30 +27,146 @@ export interface Outbox {
   mqtt(source: 'plc' | 'camera', topic: string, payload: object, qos?: 0 | 1): void;
 }
 
-const MASTER_OF: Record<AreaId, string> = {
-  warehouse: 'Кладовщик',
-  weld: 'Мастер сварки',
-  paint: 'Мастер окраски',
+/** Кто записывает простой в 1С:MES — по виду участка */
+const MASTER_BY_KIND: Record<string, string> = {
+  warehouse_in: 'Кладовщик',
+  welding: 'Мастер сварки',
+  painting: 'Мастер окраски',
   assembly: 'Мастер сборки',
-  qc: 'Мастер ОТК',
-  finished: 'Кладовщик ГП',
+  inspection: 'Мастер ОТК',
+  warehouse_out: 'Кладовщик ГП',
 };
 
-const LINE_OF = { weld: 'Сварка-1', paint: 'Окраска-1', assembly: 'Сборка-1' } as const;
+export function masterOf(plant: PlantModel, area: AreaId): string {
+  const st = plant.stageById.get(area);
+  return (st && MASTER_BY_KIND[st.kind]) ?? (st ? `Мастер участка «${st.short}»` : 'Мастер');
+}
+
+/** Участки со сменным отчётом в 1С:MES и их линии: «Сварка-1», «Окраска-1», «Сборка-1» */
+export function reportLines(plant: PlantModel): { area: AreaId; line: string }[] {
+  return plant.production.filter((s) => s.kind === 'welding' || s.kind === 'painting' || s.kind === 'assembly' || s.kind === 'custom').map((s) => ({ area: s.id, line: `${s.short}-1` }));
+}
+
+/**
+ * Даёт ли имитатор данные контроллера по оборудованию: способ «Имитатор (демо)», а с флагом
+ * «имитировать всё» — и любой автоматический (OPC UA, Modbus, SCADA, датчик); поле — по ступени.
+ */
+export function simulatesField(plant: PlantModel, equipmentId: string, field: CanonicalField, stage: Stage, simulateAll: boolean): boolean {
+  const e = plant.equipmentById.get(equipmentId);
+  if (!e || e.passive || !e.type.fields.includes(field)) return false;
+  const m = e.connection.method;
+  const on = m === 'simulator' || (simulateAll && m !== 'none' && m !== 'manual');
+  if (!on) return false;
+  const need = m === 'retrofit_sensor' ? 2 : CANONICAL_FIELD_DEF[field].stage;
+  return stage >= need;
+}
 
 export class Adapters {
   private seq: Record<string, number> = {};
   private pendingMes: { at: number; event: CanonicalEvent }[] = [];
   private openRegs = new Map<string, { from: string; equipmentId: string; area: AreaId; reason: string; category: DowntimeInfo['category'] }>();
   private delays: Rng;
+  /** Отметки кузовов: задержка человека, пропуски и дубли — свой поток случайных чисел */
+  private scans: Rng;
+  /** Последняя отметка 1С:MES по кузову: человек сканирует по порядку */
+  private lastScan = new Map<string, number>();
+  /** Кузова с нанесённым VIN: после этого 1С и контроллеры отмечают их и по VIN */
+  private vinShown = new Set<string>();
 
   constructor(
     private runId: number,
     seed: number,
     private out: Outbox,
     private stage: () => Stage,
+    private plant: () => PlantModel = () => SEED_MODEL,
+    private simulateAll: () => boolean = () => false,
   ) {
     this.delays = new Rng(seed ^ 0x5bd1e995);
+    this.scans = new Rng(seed ^ 0x27d4eb2f);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Отметки кузова
+
+  private point(pred: (p: PlantPoint) => boolean): PlantPoint | undefined {
+    return this.plant().points.find(pred);
+  }
+
+  private stagePoint(area: AreaId, role: IdPointRole): PlantPoint | undefined {
+    return this.point((p) => p.stageId === area && p.role === role);
+  }
+
+  /** Точка работает на этой ступени: сканер 1С — всегда, RFID и ПЛК — с подключёнными контроллерами */
+  private active(p: PlantPoint | undefined): p is PlantPoint {
+    if (!p || ID_METHOD_DEF[p.method].stage > this.stage()) return false;
+    if (p.method === 'mes_scan' || p.method === 'manual') return true;
+    const m = p.connection?.method;
+    return m === 'simulator' || (this.simulateAll() && !!m && m !== 'none' && m !== 'manual');
+  }
+
+  private vinOf(b: BodyRef): string | undefined {
+    return this.vinShown.has(b.bodyId) ? b.vin : undefined;
+  }
+
+  /**
+   * Скан 1С:MES: человек сканирует с задержкой до 2 минут и по порядку; около 1% отметок теряется,
+   * около 0,5% уходит дважды. reliable — отметка, без которой учёт не сходится (выдача комплекта, приёмка ГП).
+   */
+  private mesScan(b: BodyRef, p: PlantPoint, direction: 'in' | 'out', t: number, opts: { reliable?: boolean; delayMin?: number } = {}) {
+    if (!opts.reliable && this.scans.chance(0.01)) return;
+    let ts = t + this.scans.range(0, opts.delayMin ?? 2) * MIN;
+    ts = Math.max(ts, (this.lastScan.get(b.bodyId) ?? 0) + 5000);
+    this.lastScan.set(b.bodyId, ts);
+    const event = (at: number): CanonicalEvent => ({
+      eventId: this.id('mes'),
+      source: ID_METHOD_DEF[p.method].source === 'master' ? 'master' : 'mes',
+      ts: toPlantIso(at),
+      area: p.stageId,
+      vin: this.vinOf(b),
+      type: 'body_checkpoint',
+      payload: { bodyId: b.bodyId, checkpointId: p.id, direction },
+    });
+    this.pendingMes.push({ at: ts, event: event(ts) });
+    if (!opts.reliable && this.scans.chance(0.005)) {
+      const again = ts + this.scans.range(5, 40) * 1000;
+      this.pendingMes.push({ at: again, event: event(again) });
+    }
+  }
+
+  /** RFID или трекинг ПЛК: сразу по MQTT, с теми же пропусками и дублями */
+  private plcMark(b: BodyRef, p: PlantPoint, direction: 'in' | 'out', t: number, postId?: string) {
+    if (this.scans.chance(0.01)) return;
+    const payload = { bodyId: b.bodyId, vin: this.vinOf(b), direction, postId, ts: toPlantIso(t) };
+    this.out.mqtt('plc', topics.checkpoint(p.stageId, p.id), payload, 1);
+    if (this.scans.chance(0.005)) this.out.mqtt('plc', topics.checkpoint(p.stageId, p.id), { ...payload, ts: toPlantIso(t + this.scans.range(3, 30) * 1000) }, 1);
+  }
+
+  /** Кузов у оборудования: точка оборудования (RFID, ПЛК, приём в лаборатории) */
+  private atEquipment(b: BodyRef, equipmentId: string, postId: string, direction: 'in' | 'out', t: number) {
+    const p = this.point((x) => x.equipmentId === equipmentId);
+    if (!this.active(p)) return;
+    if (p.method === 'mes_scan' || p.method === 'manual') this.mesScan(b, p, direction, t, { reliable: true, delayMin: 1 });
+    else if (p.method === 'plc_tracking') {
+      if (direction === 'in') this.plcMark(b, p, 'in', t, postId);
+    } else this.plcMark(b, p, direction, t, postId);
+  }
+
+  /** Операции поста выполнены: результат от робота или инструмента (ступень 1), VIN — в 1С:MES */
+  private operations(b: BodyRef, post: string, equipmentId: string, area: AreaId, t: number) {
+    const ops = plantOperations(this.plant()).get(post)?.ops ?? [];
+    if (ops.includes('vin_marking') && !this.vinShown.has(b.bodyId)) {
+      this.vinShown.add(b.bodyId);
+      this.out.http({ eventId: this.id('mes'), source: 'mes', ts: toPlantIso(t), area, vin: b.vin, type: 'vin_assigned', payload: { bodyId: b.bodyId } });
+    }
+    if (!this.emits(equipmentId, 'state')) return;
+    for (const op of ops) {
+      if (op === 'vin_marking') continue;
+      this.out.mqtt('plc', topics.operation(area, equipmentId), { bodyId: b.bodyId, vin: this.vinOf(b), operation: op, result: 'ok', ts: toPlantIso(t) }, 0);
+    }
+  }
+
+  private emits(equipmentId: string, field: CanonicalField): boolean {
+    return simulatesField(this.plant(), equipmentId, field, this.stage(), this.simulateAll());
   }
 
   private id(source: string): string {
@@ -53,16 +178,47 @@ export class Adapters {
     const stage = this.stage();
     switch (e.kind) {
       case 'pass':
+        if (e.equipmentId) this.operations(e.body, e.post, e.equipmentId, e.area, e.t);
+        break;
+
+      case 'order': {
+        const color = this.plant().colorByCode.get(e.body.colorCode);
         this.out.http({
-          eventId: this.id('mes'),
-          source: 'mes',
+          eventId: `erp-r${this.runId}-order-${e.body.bodyId}`,
+          source: 'erp',
           ts: toPlantIso(e.t),
-          area: e.area,
-          equipmentId: e.equipmentId,
-          vin: e.vin,
-          type: 'post_passed',
-          payload: { model: e.model, post: e.post },
+          area: this.plant().warehouseIn?.id ?? 'warehouse',
+          type: 'production_order',
+          payload: { bodyId: e.body.bodyId, model: e.body.model, colorCode: e.body.colorCode || undefined, colorName: color?.name, plannedSeq: e.body.serial },
         });
+        break;
+      }
+
+      case 'kit': {
+        const p = this.plant().warehouseIn ? this.stagePoint(this.plant().warehouseIn!.id, 'stage_exit') : undefined;
+        if (this.active(p)) this.mesScan(e.body, p, 'out', e.t, { reliable: true, delayMin: 0.3 });
+        break;
+      }
+
+      case 'enter': {
+        const p = this.stagePoint(e.area, 'stage_entry');
+        const finished = this.plant().warehouseOut?.id === e.area;
+        if (this.active(p)) this.mesScan(e.body, p, 'in', e.t, { reliable: finished });
+        break;
+      }
+
+      case 'exit': {
+        const p = this.stagePoint(e.area, 'stage_exit');
+        if (this.active(p)) this.mesScan(e.body, p, 'out', e.t);
+        break;
+      }
+
+      case 'arrive':
+        this.atEquipment(e.body, e.equipmentId, e.post, 'in', e.t);
+        break;
+
+      case 'leave':
+        this.atEquipment(e.body, e.equipmentId, e.post, 'out', e.t);
         break;
 
       case 'defect':
@@ -92,7 +248,7 @@ export class Adapters {
             area: e.info.area,
             equipmentId: e.info.equipmentId,
             type: 'downtime_registered',
-            payload: { reason: e.info.reason, category: e.info.category, from: toPlantIso(from), registeredBy: MASTER_OF[e.info.area] },
+            payload: { reason: e.info.reason, category: e.info.category, from: toPlantIso(from), registeredBy: masterOf(this.plant(), e.info.area) },
           },
         });
         break;
@@ -123,7 +279,7 @@ export class Adapters {
               area: reg.area,
               equipmentId: reg.equipmentId,
               type: 'downtime_registered',
-              payload: { reason: reg.reason, category: reg.category, from: reg.from, to: toPlantIso(roundTo5(e.to)), registeredBy: MASTER_OF[reg.area] },
+              payload: { reason: reg.reason, category: reg.category, from: reg.from, to: toPlantIso(roundTo5(e.to)), registeredBy: masterOf(this.plant(), reg.area) },
             },
           });
         }
@@ -144,39 +300,40 @@ export class Adapters {
       case 'shift_end': {
         const s = e.stats;
         const ts = toPlantIso(e.t + 3 * MIN);
-        for (const area of ['weld', 'paint', 'assembly'] as const) {
-          const hours = Math.max(0, (480 - s.stoppedMin[area]) / 60);
+        for (const { area, line } of reportLines(this.plant())) {
+          const hours = Math.max(0, (480 - (s.stoppedMin[area] ?? 0)) / 60);
+          const produced = s.output[area] ?? 0;
+          const defects = s.defects[area] ?? 0;
           this.out.http({
             eventId: `mes-r${this.runId}-report-${s.shift.key}-${area}`,
             source: 'mes',
             ts,
             area,
             type: 'shift_report',
-            payload: { date: s.shift.date, shift: s.shift.index, line: LINE_OF[area], plan: 120, fact: s.output[area], hours: round1(hours), load: Math.round((hours / 8) * 100) },
+            payload: { date: s.shift.date, shift: s.shift.index, line, plan: 120, fact: produced, hours: round1(hours), load: Math.round((hours / 8) * 100) },
           });
-          const produced = s.output[area];
           this.out.http({
             eventId: `qls-r${this.runId}-quality-${s.shift.key}-${area}`,
             source: 'qls',
             ts,
             area,
             type: 'quality_summary',
-            payload: { date: s.shift.date, shift: s.shift.index, produced, defects: s.defects[area], pct: produced ? round1((s.defects[area] / produced) * 100) : 0 },
+            payload: { date: s.shift.date, shift: s.shift.index, produced, defects, pct: produced ? round1((defects / produced) * 100) : 0 },
           });
         }
         break;
       }
 
       case 'state':
-        if (stage >= 1) this.out.mqtt('plc', topics.state(e.area, e.equipmentId), { status: e.status, code: e.code, text: e.text, ts: toPlantIso(e.t) }, 1);
+        if (this.emits(e.equipmentId, 'state')) this.out.mqtt('plc', topics.state(e.area, e.equipmentId), { status: e.status, code: e.code, text: e.text, ts: toPlantIso(e.t) }, 1);
         break;
 
       case 'counter':
-        if (stage >= 1) this.out.mqtt('plc', topics.counter(e.area, e.equipmentId), { cycles: e.cycles, total: e.total, ts: toPlantIso(e.t) }, 1);
+        if (this.emits(e.equipmentId, 'cycleCounter')) this.out.mqtt('plc', topics.counter(e.area, e.equipmentId), { cycles: e.cycles, total: e.total, ts: toPlantIso(e.t) }, 1);
         break;
 
       case 'telemetry':
-        if (e.metric === 'filter_dp_pa' ? stage >= 1 : stage >= 2) {
+        if (this.emits(e.equipmentId, METRIC_FIELD[e.metric])) {
           this.out.mqtt('plc', topics.telemetry(e.area, e.equipmentId), { metric: e.metric, value: e.value, ts: toPlantIso(e.t) });
         }
         break;
@@ -207,16 +364,43 @@ export class Adapters {
 
   /** Незавершёнка в 1С:MES на начало смены: где какой кузов */
   wip(world: World, at: number) {
-    world.wipSnapshot().forEach((b, i) => {
+    const plant = this.plant();
+    const firstStage = plant.production[0]?.id;
+    world.wipSnapshot().forEach((w, i) => {
+      const b = w.body;
+      const ts = at - 90_000 + i * 500;
+      const color = plant.colorByCode.get(b.colorCode);
       this.out.http({
-        eventId: `mes-r${this.runId}-wip-${b.vin}`,
-        source: 'mes',
-        ts: toPlantIso(at - (60 - i) * 1000),
-        area: b.area,
-        vin: b.vin,
-        type: 'post_passed',
-        payload: { model: b.model, post: b.lastPost },
+        eventId: `erp-r${this.runId}-order-${b.bodyId}`,
+        source: 'erp',
+        ts: toPlantIso(at - 4 * 3600_000),
+        area: plant.warehouseIn?.id ?? 'warehouse',
+        type: 'production_order',
+        payload: { bodyId: b.bodyId, model: b.model, colorCode: b.colorCode || undefined, colorName: color?.name, plannedSeq: b.serial },
       });
+      // VIN уже нанесён, если кузов прошёл пост маркировки (всё после сварки и доводка)
+      const atVinOrLater = w.area !== firstStage || (w.at === 'post' && plant.stageById.get(w.area)?.outletPosts.includes(w.post));
+      if (atVinOrLater) {
+        this.vinShown.add(b.bodyId);
+        this.out.http({ eventId: `mes-r${this.runId}-wipvin-${b.bodyId}`, source: 'mes', ts: toPlantIso(at - 3 * 3600_000), area: firstStage ?? w.area, vin: b.vin, type: 'vin_assigned', payload: { bodyId: b.bodyId } });
+      }
+      const point = this.stagePoint(w.area, w.at === 'post' ? 'stage_entry' : 'stage_exit');
+      if (this.active(point)) {
+        this.out.http({
+          eventId: `mes-r${this.runId}-wip-${b.bodyId}`,
+          source: 'mes',
+          ts: toPlantIso(ts),
+          area: w.area,
+          vin: this.vinOf(b),
+          type: 'body_checkpoint',
+          payload: { bodyId: b.bodyId, checkpointId: point.id, direction: w.at === 'post' ? 'in' : 'out' },
+        });
+        this.lastScan.set(b.bodyId, ts);
+      }
+      if (w.at === 'post') {
+        const p = this.point((x) => x.equipmentId === w.equipmentId);
+        if (this.active(p) && p.method !== 'mes_scan') this.out.mqtt('plc', topics.checkpoint(p.stageId, p.id), { bodyId: b.bodyId, vin: this.vinOf(b), direction: 'in', postId: w.post, ts: toPlantIso(ts + 200) }, 1);
+      }
     });
   }
 
@@ -233,13 +417,24 @@ export class Adapters {
     });
   }
 
-  /** При подключении контроллеров — текущее состояние и счётчики всего оборудования */
-  plcSnapshot(world: World, at: number) {
+  /** При подключении контроллеров — текущее состояние и счётчики подключённого оборудования */
+  plcSnapshot(world: World, at: number, only?: string) {
     for (const e of world.equipmentSnapshot()) {
-      this.out.mqtt('plc', topics.state(e.area, e.id), { status: e.status, code: e.down?.code, text: e.down?.text ?? e.down?.reason, ts: toPlantIso(at) }, 1);
-      if (e.id.startsWith('ABB-')) this.out.mqtt('plc', topics.counter(e.area, e.id), { cycles: e.cycles, total: e.total, ts: toPlantIso(at) }, 1);
+      if (only && e.id !== only) continue;
+      if (this.emits(e.id, 'state')) this.out.mqtt('plc', topics.state(e.area, e.id), { status: e.status, code: e.down?.code, text: e.down?.text ?? e.down?.reason, ts: toPlantIso(at) }, 1);
+      if (this.emits(e.id, 'cycleCounter')) this.out.mqtt('plc', topics.counter(e.area, e.id), { cycles: e.cycles, total: e.total, ts: toPlantIso(at) }, 1);
     }
-    this.out.mqtt('plc', topics.telemetry('paint', 'BOOTH-02'), { metric: 'filter_dp_pa', value: round1(world.filterB2Dp), ts: toPlantIso(at) });
+    for (const f of world.filterSnapshot()) {
+      if (only && f.equipmentId !== only) continue;
+      if (this.emits(f.equipmentId, 'filterDpPa')) this.out.mqtt('plc', topics.telemetry(f.area, f.equipmentId), { metric: 'filter_dp_pa', value: round1(f.dp), ts: toPlantIso(at) });
+    }
+  }
+
+  /** Пульс связи подключённого оборудования: шлюз видит, что данные идут, даже если состояние не меняется */
+  heartbeat(world: World, at: number) {
+    for (const e of world.equipmentSnapshot()) {
+      if (this.emits(e.id, 'state')) this.out.mqtt('plc', topics.heartbeat(e.area, e.id), { status: e.status, ts: toPlantIso(at) }, 0);
+    }
   }
 
   stockSnapshot(world: World, at: number) {
@@ -247,8 +442,18 @@ export class Adapters {
   }
 }
 
+const METRIC_FIELD: Record<string, CanonicalField> = {
+  filter_dp_pa: 'filterDpPa',
+  motor_current_a: 'motorCurrentA',
+  vibration_mm_s: 'vibrationMmS',
+  temperature_c: 'temperatureC',
+  pressure_bar: 'pressureBar',
+  torque_nm: 'torqueNm',
+};
+
+/** Видеокамера участка: из справочника камер, для новых участков — CAM-<код> */
 function cameraOf(area: AreaId): string {
-  return area === 'weld' ? 'CAM-WELD' : area === 'paint' ? 'CAM-PAINT' : area === 'qc' ? 'CAM-QC' : 'CAM-ASM';
+  return CAMERAS.find((c) => c.area === area)?.id ?? `CAM-${area.toUpperCase()}`;
 }
 
 function roundTo5(ms: number): number {

@@ -77,6 +77,11 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
       { name: '1С и мастер', description: 'Приём данных из 1С:MES, QLS, WMS, ERP и с телефона мастера' },
       { name: 'Импорт', description: 'Загрузка выданных таблиц с проверкой противоречий' },
       { name: 'Двойник', description: 'Чтение состояния, прогнозов, инцидентов и принятие решений' },
+      {
+        name: 'Конфигурация завода',
+        description:
+          'Состав цеха: участки по потоку, параллельные станции, оборудование и его подключение. Каждое применение — новая версия, откат возможен. После применения двойник, интерфейс (WebSocket, сообщение plant) и имитаторы (MQTT allur/kst/twin/plant-config) перестраиваются без перезапуска.',
+      },
       { name: 'Демо', description: 'Управление демонстрацией. В реальном внедрении не используется' },
     ],
     paths: {
@@ -162,6 +167,22 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
           responses: { 200: ok('Паспорт'), 404: { description: 'VIN не найден' } },
         },
       },
+      '/api/v1/bodies': {
+        get: {
+          tags: ['Двойник'],
+          summary: 'Кузова в цехе: где каждый, сколько на месте против нормы, вид по выполненным операциям, флаги',
+          description: 'Положение — по отметкам кузова (body_checkpoint): до станции, если её отмечают RFID или ПЛК, иначе — до участка с оценкой по норме времени.',
+          responses: { 200: ok('Список кузовов') },
+        },
+      },
+      '/api/v1/bodies/{id}': {
+        get: {
+          tags: ['Двойник'],
+          summary: 'Кузов по номеру или VIN: маршрут операций, история отметок, восстановленные отметки и петли перекраски',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Номер кузова (B-04812) или VIN' }],
+          responses: { 200: ok('Кузов'), 404: { description: 'Кузов не найден' } },
+        },
+      },
       '/api/v1/sources': {
         get: { tags: ['Двойник'], summary: 'Состояние источников данных и ошибки валидации', responses: { 200: ok('Источники') } },
       },
@@ -172,6 +193,78 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
           description: 'Двойник выдаёт наряд в системы завода (MQTT allur/kst/twin/work-orders) и пересчитывает прогноз.',
           requestBody: jsonBody('DecisionRequest', { 'Заменить фильтр в пересменку': ex.rest.decision }),
           responses: { 200: ok('Решение принято, наряд выдан'), 400: bad, 404: { description: 'Инцидент или вариант не найден' } },
+        },
+      },
+      '/api/v1/plant/config': {
+        get: { tags: ['Конфигурация завода'], summary: 'Текущая применённая конфигурация (с живым состоянием связи)', responses: { 200: ok('Конфигурация', 'PlantConfig') } },
+        put: {
+          tags: ['Конфигурация завода'],
+          summary: 'Применить новую версию',
+          description: 'Проверяет и применяет. Версию, время и автора ставит шлюз. Нельзя удалить оборудование, по которому открыт инцидент.',
+          requestBody: jsonBody('PlantConfigInput'),
+          responses: { 200: ok('Применено: новая версия и список изменений'), 400: bad },
+        },
+      },
+      '/api/v1/plant/config/versions': {
+        get: { tags: ['Конфигурация завода'], summary: 'История версий', responses: { 200: ok('Версии, новые сверху') } },
+      },
+      '/api/v1/plant/config/validate': {
+        post: {
+          tags: ['Конфигурация завода'],
+          summary: 'Проверка без применения',
+          description: 'Ошибки (нельзя применить) и предупреждения — по-русски, с путём к участку, станции или оборудованию.',
+          requestBody: jsonBody('PlantConfigInput'),
+          responses: { 200: ok('Итог проверки', 'PlantValidation') },
+        },
+      },
+      '/api/v1/plant/config/preview-impact': {
+        post: {
+          tags: ['Конфигурация завода'],
+          summary: 'Влияние изменений без применения',
+          description: 'Изменения человеческим языком, пропускная способность участков до и после, узкое место.',
+          requestBody: jsonBody('PlantConfigInput'),
+          responses: { 200: ok('Влияние', 'PlantImpact') },
+        },
+      },
+      '/api/v1/plant/config/rollback/{ver}': {
+        post: {
+          tags: ['Конфигурация завода'],
+          summary: 'Откат к версии',
+          description: 'Создаёт новую версию — копию указанной. История остаётся линейной.',
+          parameters: [{ name: 'ver', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+          responses: { 200: ok('Откат применён'), 400: bad, 404: { description: 'Версии нет в истории' } },
+        },
+      },
+      '/api/v1/plant/config/export': {
+        get: { tags: ['Конфигурация завода'], summary: 'Выгрузить текущую конфигурацию в JSON', responses: { 200: ok('Файл plant-config-vN.json', 'PlantConfig') } },
+      },
+      '/api/v1/plant/config/import': {
+        post: {
+          tags: ['Конфигурация завода'],
+          summary: 'Загрузить конфигурацию из JSON и применить',
+          requestBody: jsonBody('PlantConfigInput'),
+          responses: { 200: ok('Применено'), 400: bad },
+        },
+      },
+      '/api/v1/equipment/{id}/connection/test': {
+        post: {
+          tags: ['Конфигурация завода'],
+          summary: 'Проверка подключения оборудования',
+          description:
+            'Имитатор (демо) опрашивается по-настоящему и возвращает живые значения. Для OPC UA, Modbus, S7 и SCADA — проверка адреса и попытка TCP-подключения с таймаутом; успешное подключение к несуществующему устройству не изображается.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: ref('EquipmentCode') }],
+          requestBody: jsonBody('PlantConnectionInput'),
+          responses: { 200: ok('Итог проверки', 'ConnectionTestResult'), 400: bad, 404: { description: 'Оборудования нет в применённой конфигурации' } },
+        },
+      },
+      '/api/v1/equipment/{id}/connection': {
+        put: {
+          tags: ['Конфигурация завода'],
+          summary: 'Сохранить подключение оборудования',
+          description: 'Создаёт новую версию конфигурации. Статус «на связи» появится, когда по оборудованию реально придут данные.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: ref('EquipmentCode') }],
+          requestBody: jsonBody('PlantConnectionInput'),
+          responses: { 200: ok('Сохранено'), 400: bad, 404: { description: 'Оборудования нет в применённой конфигурации' } },
         },
       },
       '/api/v1/demo': {
@@ -207,6 +300,17 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
           requestBody: {
             required: true,
             content: { 'application/json': { schema: { type: 'object', properties: { stage: ref('Stage') }, required: ['stage'] } } },
+          },
+          responses: { 200: ok('Состояние') },
+        },
+      },
+      '/api/v1/demo/simulate-all': {
+        post: {
+          tags: ['Демо'],
+          summary: 'Имитировать данные со всего оборудования, не дожидаясь подключения',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { type: 'object', properties: { on: { type: 'boolean' } }, required: ['on'] } } },
           },
           responses: { 200: ok('Состояние') },
         },

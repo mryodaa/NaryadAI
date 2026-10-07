@@ -1,8 +1,14 @@
 // Снимок двойника для интерфейса (WebSocket /ws и GET /api/v1/state).
 import type { AreaId, BufferId, SourceId } from './plant';
+import type { ConnectionStatus } from './equipment-catalog';
+import type { PlantConfig } from './plant-config';
 import type { ScenarioId, Stage } from './scenarios';
+import type { ModelId } from './plant';
+import type { ColorFinish, IdMethod } from './identification';
+import type { VisualEffect } from './operations';
 
-export type AreaStatus = 'running' | 'starved' | 'blocked' | 'fault' | 'degraded_quality' | 'maintenance' | 'idle';
+/** reduced — встала одна из параллельных станций: участок работает, но мощность ниже */
+export type AreaStatus = 'running' | 'reduced' | 'starved' | 'blocked' | 'fault' | 'degraded_quality' | 'maintenance' | 'idle';
 
 /** Тон отклонения: от него зависят цвет, иконка и слово */
 export type Tone = 'neutral' | 'waiting' | 'attention' | 'fault' | 'maintenance';
@@ -122,6 +128,8 @@ export interface LiveSnapshot {
   ready: boolean;
   now: string;
   runId: number;
+  /** Версия конфигурации завода, по которой посчитан снимок */
+  plantVersion: number;
   stage: Stage;
   speed: number;
   paused: boolean;
@@ -165,9 +173,105 @@ export interface SourceStatus {
   clients: number;
 }
 
+/** Связь с оборудованием сейчас — считает шлюз по реальному потоку данных */
+export interface ConnectionRuntime {
+  equipmentId: string;
+  status: ConnectionStatus;
+  lastSeenAt: string | null;
+  error: string | null;
+  /** Почему подключение не активно: «ступень 0 — контроллеры не подключены» */
+  note: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Кузова: где каждый, как выглядит, сколько времени на месте против нормы
+
+export type BodyFlag = 'delayed' | 'nonconformity' | 'rework' | 'restored_checkpoint' | 'unknown_color';
+export type BodyLocKind = 'warehouse' | 'buffer' | 'stage' | 'station' | 'finished';
+
+export interface BodyColorView {
+  code: string;
+  name: string;
+  hex: string;
+  finish: ColorFinish;
+}
+
+export interface BodyLocation {
+  kind: BodyLocKind;
+  /** Участок (для буфера — участок, после которого кузов ждёт) */
+  stageId: string;
+  bufferId?: string;
+  equipmentId?: string;
+  postId?: string;
+  /** station — место отмечено (RFID, ПЛК), stage — известен только участок */
+  precision: 'station' | 'stage';
+  /** Оборудование не отмечено, а оценено по норме времени */
+  estimated: boolean;
+}
+
+export interface BodyView {
+  bodyId: string;
+  vin: string | null;
+  model: ModelId;
+  color: BodyColorView | null;
+  loc: BodyLocation;
+  /** С какого момента на текущем месте */
+  since: string;
+  /** Норма на текущем месте, с (нет — очередь или склад) */
+  normSec: number | null;
+  /** Накопленные визуальные эффекты: вид кузова (при точности до участка — с оценкой по времени) */
+  visual: VisualEffect[];
+  flags: BodyFlag[];
+  /** Порядок прихода на текущее место: очередь в буфере */
+  order: number;
+}
+
+export type RouteStatus = 'waiting' | 'in_progress' | 'done' | 'failed' | 'skipped';
+
+export interface BodyRouteStepView {
+  operation: string;
+  name: string;
+  stageId: string;
+  equipmentId: string | null;
+  postId: string | null;
+  status: RouteStatus;
+  at: string | null;
+  /** Чем подтверждено: событием операции, выходом со станции или участка, известно до начала отслеживания */
+  by: 'operation' | 'station_out' | 'stage_exit' | 'assumed' | null;
+  source: string | null;
+  effect?: VisualEffect;
+  optional: boolean;
+  /** Номер прохода участка: 0 — первый, 1 — перекраска и т. д. */
+  loop: number;
+}
+
+export interface BodyHistoryItem {
+  at: string;
+  kind: 'order' | 'checkpoint' | 'operation' | 'vin' | 'nonconformity' | 'restored' | 'rework' | 'duplicate';
+  text: string;
+  stageId?: string;
+  checkpointId?: string;
+  equipmentId?: string;
+  method?: IdMethod | null;
+  source: string;
+  restored?: boolean;
+}
+
+export interface BodyDetail extends BodyView {
+  plannedSeq: number | null;
+  trim: string | null;
+  route: BodyRouteStepView[];
+  history: BodyHistoryItem[];
+}
+
 /** Сообщения WebSocket от шлюза к интерфейсу */
 export type ServerMessage =
   | { t: 'snapshot'; data: LiveSnapshot }
   | { t: 'feed'; items: FeedItem[] }
   | { t: 'sources'; items: SourceStatus[] }
-  | { t: 'booting'; message: string };
+  | { t: 'booting'; message: string }
+  /** plant_config_changed: применена новая версия конфигурации завода (и при подключении) */
+  | { t: 'plant'; config: PlantConfig }
+  | { t: 'connections'; items: ConnectionRuntime[] }
+  /** Кузова в цехе: раз в секунду */
+  | { t: 'bodies'; at: string; items: BodyView[] };

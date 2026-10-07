@@ -1,13 +1,14 @@
 // Данные для 3D — из тех же источников, что у «Панели»: снимок двойника (WebSocket), детали
 // участков и список инцидентов (REST, общий кэш с боковой панелью). Своих показателей здесь нет.
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import type { AreaId, FeedItem, LiveSnapshot, Tone } from '@allur/contracts/ref';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { inflect, type AreaId, type FeedItem, type LiveSnapshot, type Tone } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import type { AreaDetail, Incident } from '../../api/types';
-import { useAreaDetail, usePaintDefect } from '../../api/queries';
+import { usePaintDefect } from '../../api/queries';
 import { areaRows, type AreaRowView } from '../../state/selectors';
 import { useLive } from '../../state/live';
+import { usePlantModel } from '../../state/plant';
 import { useIssuedOrders } from '../../state/decisions';
 import { num, num1, timeHM } from '../../lib/format';
 
@@ -60,34 +61,37 @@ export interface SceneData {
   sensors: SensorView[];
 }
 
-const DETAIL_AREAS = ['weld', 'paint', 'assembly', 'qc'] as const;
-
 export function useSceneData(s: LiveSnapshot): SceneData {
   const paintDefect = usePaintDefect(s);
-  const weld = useAreaDetail('weld').data;
-  const paint = useAreaDetail('paint').data;
-  const assembly = useAreaDetail('assembly').data;
-  const qc = useAreaDetail('qc').data;
-  const warehouse = useAreaDetail('warehouse').data;
+  const model = usePlantModel();
+  // детали производственных участков и склада — тот же кэш, что у боковой панели участка
+  const detailAreas = useMemo(() => [...model.production.map((st) => st.id), ...(model.warehouseIn ? [model.warehouseIn.id] : [])], [model]);
+  const detailQueries = useQueries({
+    queries: detailAreas.map((area) => ({ queryKey: ['area', area], queryFn: () => api<AreaDetail>(`/api/v1/areas/${area}`), refetchInterval: 3000 })),
+  });
+  const detailsKey = detailQueries.map((q) => q.dataUpdatedAt).join('|');
   const incidents = useQuery({ queryKey: ['incidents'], queryFn: () => api<Incident[]>('/api/v1/incidents'), refetchInterval: 4000 }).data;
+  const drives = useMemo(() => model.equipment.filter((e) => e.type.fields.includes('motorCurrentA') && e.type.fields.includes('vibrationMmS')), [model]);
   // ток и вибрацию привода шлюз не отдаёт по REST — берём последние значения из ленты входящих сообщений
-  const drive = useLive((x) => (s.stage >= 2 ? driveTelemetry(x.feed) : ''));
+  const drive = useLive((x) => (s.stage >= 2 ? drives.map((d) => `${d.id}=${driveTelemetry(x.feed, d.id)}`).join(';') : ''));
   const issued = useIssuedOrders();
 
   return useMemo(() => {
     const rows: SceneData['rows'] = {};
-    for (const r of areaRows(s, paintDefect)) rows[r.id] = r;
+    for (const r of areaRows(s, paintDefect, model)) rows[r.id] = r;
 
-    const details: Partial<Record<(typeof DETAIL_AREAS)[number], AreaDetail | undefined>> = { weld, paint, assembly, qc };
+    const details = new Map(detailAreas.map((area, i) => [area, detailQueries[i]?.data as AreaDetail | undefined]));
+    const production = model.production.map((st) => st.id);
     const equipment: Record<string, EquipmentView> = {};
-    for (const area of DETAIL_AREAS) {
-      for (const e of details[area]?.equipment ?? []) {
+    for (const area of production) {
+      for (const e of details.get(area)?.equipment ?? []) {
         equipment[e.id] = { id: e.id, name: e.name, area, status: e.status, code: e.code, text: e.text, resourceLeft: e.resourceLeft, dp: e.dp };
       }
     }
-    const plcConnected = DETAIL_AREAS.some((a) => details[a]?.plcConnected);
+    const plcConnected = production.some((a) => details.get(a)?.plcConnected);
 
     const stock: Record<string, number | null> = {};
+    const warehouse = model.warehouseIn ? details.get(model.warehouseIn.id) : undefined;
     for (const k of warehouse?.stock ?? []) stock[k.kitId] = k.shiftsLeft;
 
     const byId = new Map((incidents ?? []).map((i) => [i.id, i]));
@@ -108,23 +112,27 @@ export function useSceneData(s: LiveSnapshot): SceneData {
 
     const sensors: SensorView[] = [];
     if (s.stage >= 2) {
-      const [cur, vib] = drive.split('|');
-      sensors.push({
-        equipmentId: 'CONV-03',
-        label: 'Датчики привода Конвейера-03',
-        values: [
-          { name: 'Ток', value: cur ? `${num1(Number(cur))} А` : 'нет данных' },
-          { name: 'Вибрация', value: vib ? `${num1(Number(vib))} мм/с` : 'нет данных' },
-        ],
-      });
-      for (const id of ['BOOTH-01', 'BOOTH-02']) {
-        const e = equipment[id];
-        if (e) sensors.push({ equipmentId: id, label: `Датчик фильтра ${e.name}`, values: [{ name: 'Перепад давления', value: e.dp === null ? 'нет данных' : `${num(e.dp)} Па · норма до 250` }] });
+      const values = new Map(drive.split(';').map((x) => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1)]));
+      for (const d of drives) {
+        const [cur, vib] = (values.get(d.id) ?? '|').split('|');
+        sensors.push({
+          equipmentId: d.id,
+          label: `Датчики привода ${inflect(d.name, 'gen')}`,
+          values: [
+            { name: 'Ток', value: cur ? `${num1(Number(cur))} А` : 'нет данных' },
+            { name: 'Вибрация', value: vib ? `${num1(Number(vib))} мм/с` : 'нет данных' },
+          ],
+        });
+      }
+      for (const b of model.equipment.filter((e) => e.type.fields.includes('filterDpPa'))) {
+        const e = equipment[b.id];
+        if (e) sensors.push({ equipmentId: b.id, label: `Датчик фильтра ${e.name}`, values: [{ name: 'Перепад давления', value: e.dp === null ? 'нет данных' : `${num(e.dp)} Па · норма до 250` }] });
       }
     }
 
     return { rows, equipment, plcConnected, stock, plaques, decisions, sensors };
-  }, [s, paintDefect, weld, paint, assembly, qc, warehouse, incidents, drive, issued]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s, paintDefect, model, detailsKey, incidents, drive, drives, issued]);
 }
 
 /** Текст плашки наряда: до назначенного времени — «запланировано», во время работ — «идёт» */
@@ -151,12 +159,15 @@ function decisionText(action: string, scheduledAt: string, eqStatus: EqStatus | 
   }
 }
 
-/** «ток|вибрация» последних значений по Конвейеру-03 (строки ленты: «telemetry CONV-03 motor_current_a=18.4») */
-function driveTelemetry(feed: FeedItem[]): string {
+/** «ток|вибрация» последних значений по приводу (строки ленты: «telemetry CONV-03 motor_current_a=18.4») */
+function driveTelemetry(feed: FeedItem[], equipmentId: string): string {
   let cur = '';
   let vib = '';
+  const prefix = `telemetry ${equipmentId} `;
   for (let i = feed.length - 1; i >= 0 && (!cur || !vib); i--) {
-    const m = /^telemetry CONV-03 (\w+)=(-?[\d.]+)/.exec(feed[i]!.summary);
+    const line = feed[i]!.summary;
+    if (!line.startsWith(prefix)) continue;
+    const m = /^(\w+)=(-?[\d.]+)/.exec(line.slice(prefix.length));
     if (!m) continue;
     if (m[1] === 'motor_current_a' && !cur) cur = m[2]!;
     if (m[1] === 'vibration_mm_s' && !vib) vib = m[2]!;

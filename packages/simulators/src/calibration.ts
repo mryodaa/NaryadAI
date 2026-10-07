@@ -1,5 +1,7 @@
 // Калибровка имитатора по данным кейса (раздел 8.1 задания). Все цифры — модель, а не данные Allur.
-import type { AreaId, BufferId, DowntimeCategoryId, ModelId } from '@allur/contracts';
+// Нормы цикла, отказы по типам оборудования и состав цеха — в каталоге и конфигурации завода;
+// здесь — особенности конкретного цеха: как засоряются фильтры, микропростои отдельных машин, брак.
+import type { BufferId, ModelId } from '@allur/contracts';
 
 export const MIN = 60_000;
 
@@ -9,8 +11,6 @@ export const CAL = {
   /** Сварка может «догонять» буфер, если он опустел */
   releaseCatchUpMin: 3.8,
   weldBufferTarget: 6,
-  /** Время обработки на посту, мин. Сборка (конвейер) — задаёт ритм линии */
-  cycleMin: { weld: 3.8, paint: 3.9, assembly: 4.0, qc: 3.4 } satisfies Partial<Record<AreaId, number>>,
   /** Микс моделей по плану организаторов: 2500 / 1800 / 500 */
   mix: { onix: 26, cobalt: 19, j7: 5 } satisfies Record<ModelId, number>,
   /** Сквозной номер кузова на начало демо */
@@ -32,7 +32,7 @@ export const CAL = {
   /** Фильтр Камеры-01 засоряется медленно и меняется ночью по графику */
   filterB1LifeBodies: 900,
 
-  /** Межсервисный интервал роботов, циклов */
+  /** Межсервисный интервал роботов, циклов (тот же, что в каталоге) */
   robotIntervalCycles: 6000,
 
   /** Вероятность брака на кузов */
@@ -42,17 +42,12 @@ export const CAL = {
     paintDirt: (dp: number) => (dp < 250 ? 0.011 : dp < 300 ? 0.032 : 0.1 + (dp - 300) * 0.0004),
     paintOther: 0.004,
     assemblyFinal: 0.006,
-    assemblyTrack: 0.003,
+    /** Испытательная линия (каждый кузов) */
+    assemblyTest: 0.0025,
+    /** Полигон — среди машин, взятых на полигон (выборочно, ~10%) */
+    assemblyTrackSampled: 0.005,
     assemblyRain: 0.003,
   },
-
-  /** Отказы: интенсивность в рабочий день, длительность ~ из таблицы простоев организаторов */
-  failures: [
-    { equipment: ['ABB-01', 'ABB-02', 'ABB-03', 'ABB-04'], perDay: 0.12, meanMin: 25, sdMin: 6, reason: 'Ошибка датчика', code: '50296', text: 'Ошибка датчика положения', category: 'breakdown' as DowntimeCategoryId },
-    { equipment: ['CONV-03'], perDay: 0.045, meanMin: 55, sdMin: 8, reason: 'Обрыв цепи', code: 'E-2117', text: 'Обрыв приводной цепи', category: 'breakdown' as DowntimeCategoryId },
-    { equipment: ['PRETREAT'], perDay: 0.04, meanMin: 20, sdMin: 5, reason: 'Сбой дозирования химии', code: 'P-311', text: 'Отклонение концентрации в ванне 7', category: 'breakdown' as DowntimeCategoryId },
-    { equipment: ['QC-RAIN'], perDay: 0.03, meanMin: 15, sdMin: 4, reason: 'Сбой насоса камеры герметичности', code: 'R-104', text: 'Низкое давление воды', category: 'breakdown' as DowntimeCategoryId },
-  ],
 
   /** Микропростои: мастер их не записывает — это «неучтённые потери» */
   microStops: [
@@ -74,3 +69,17 @@ export const CAL = {
 };
 
 export const SHIFT_PLAN = 120;
+
+/**
+ * Как засоряется фильтр камеры окраски:
+ * · clog — быстро и с ускорением, по нему калибрована сорность, на пределе — вынужденная замена (Камера-02);
+ * · linear — медленно, фильтр меняют ночью по графику, на сорность не влияет.
+ */
+export type FilterModel =
+  | { kind: 'clog'; affectsDirt: true; forced: true; snapshot: true }
+  | { kind: 'linear'; lifeBodies: number; risePa: number; affectsDirt: false; forced: false; snapshot: false };
+
+export function filterModelOf(equipmentId: string): FilterModel {
+  if (equipmentId === 'BOOTH-02') return { kind: 'clog', affectsDirt: true, forced: true, snapshot: true };
+  return { kind: 'linear', lifeBodies: CAL.filterB1LifeBodies, risePa: 150, affectsDirt: false, forced: false, snapshot: false };
+}

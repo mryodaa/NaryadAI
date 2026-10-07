@@ -2,6 +2,7 @@
 import {
   CircleCheck,
   CircleSlash,
+  Gauge,
   Hourglass,
   Moon,
   OctagonX,
@@ -19,6 +20,7 @@ export interface StatusMeta {
 
 export const AREA_STATUS: Record<AreaStatus, StatusMeta> = {
   running: { label: 'Работает', tone: 'neutral', icon: CircleCheck },
+  reduced: { label: 'Снижена мощность', tone: 'attention', icon: Gauge },
   starved: { label: 'Ждёт кузов', tone: 'waiting', icon: Hourglass },
   blocked: { label: 'Заблокирован', tone: 'waiting', icon: CircleSlash },
   fault: { label: 'Авария', tone: 'fault', icon: OctagonX },

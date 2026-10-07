@@ -1,0 +1,11 @@
+{
+  "eventId": "mes-20261007-0001222",
+  "source": "mes",
+  "ts": "2026-10-07T12:58:00+05:00",
+  "area": "weld",
+  "vin": "KZACN1S13TK004815",
+  "type": "vin_assigned",
+  "payload": {
+    "bodyId": "B-04815"
+  }
+}

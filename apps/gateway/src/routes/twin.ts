@@ -40,9 +40,19 @@ export function twinRoutes(app: FastifyInstance, ctx: Ctx) {
       return reply.code(400).send({ error: 'validation_failed', message: 'VIN — 17 символов: латинские буквы (кроме I, O, Q) и цифры' });
     }
     const events = db.eventsByVin(vin);
-    const passport = events.length ? twin.passport(vin, events, clock.now()) : null;
+    const passport = twin.passport(vin, events, clock.now());
     if (!passport) return reply.code(404).send({ error: 'not_found', message: `Кузов ${vin} не найден — проверьте номер` });
     return passport;
+  });
+
+  /** Кузова в цехе: где, сколько против нормы, вид и флаги */
+  app.get('/api/v1/bodies', async () => twin.bodies(clock.now()));
+
+  /** Кузов по номеру или VIN: маршрут операций и история отметок */
+  app.get<{ Params: { id: string } }>('/api/v1/bodies/:id', async (req, reply) => {
+    const b = twin.body(req.params.id.toUpperCase(), clock.now());
+    if (!b) return reply.code(404).send({ error: 'not_found', message: `Кузов ${req.params.id} не найден` });
+    return b;
   });
 
   app.get('/api/v1/checks', async () => twin.checks());

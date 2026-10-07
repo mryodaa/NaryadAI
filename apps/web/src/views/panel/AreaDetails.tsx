@@ -1,11 +1,12 @@
 // Раскрытая строка участка: оборудование строгим списком, одна линия тренда и «Подробнее».
 import { ArrowRight, TriangleAlert } from 'lucide-react';
-import type { AreaId } from '@allur/contracts/ref';
+import { MODEL_BY_ID, type AreaId, type PlantModel } from '@allur/contracts/ref';
 import type { AreaDetail } from '../../api/types';
 import { useAreaDetail } from '../../api/queries';
 import { Button } from '../../components/ui';
 import { SourceBadge } from '../../components/SourceBadge';
 import { openAreaPanel } from '../../state/view';
+import { usePlantModel } from '../../state/plant';
 import { EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num, num1, pct0, timeHM } from '../../lib/format';
 import { StatusMark } from './StatusMark';
@@ -45,7 +46,37 @@ export function AreaDetails({ area, shiftRunning }: { area: AreaId; shiftRunning
 const TH = 'py-1 pr-3 text-sm font-semibold text-ink-3';
 const TD = 'py-1.5 pr-3 align-top';
 
+type EquipmentRow = AreaDetail['equipment'][number];
+
+/**
+ * Оборудование по устройству участка: общее на входе, линии (станции), общее на выходе, в стороне
+ * от потока. Участок в одну линию без ответвлений — простым списком, без заголовков.
+ */
+function groupEquipment(model: PlantModel, area: AreaId, list: EquipmentRow[]): { title: string | null; note?: string; items: EquipmentRow[] }[] {
+  const stage = model.stageById.get(area);
+  if (!stage || (stage.stations.length < 2 && !stage.sides.length)) return [{ title: null, items: list }];
+  const byId = new Map(list.map((e) => [e.id, e]));
+  const pick = (ids: string[]) => ids.map((id) => byId.get(id)).filter((e): e is EquipmentRow => !!e);
+  const groups: { title: string | null; note?: string; items: EquipmentRow[] }[] = [];
+  if (stage.inlet.length) groups.push({ title: 'Общее на входе', items: pick(stage.inlet.map((e) => e.id)) });
+  for (const st of stage.stations) {
+    const models = st.models?.map((m) => MODEL_BY_ID[m].short).join(', ');
+    groups.push({ title: models && !st.name.includes(models) ? `${st.name} · ${models}` : st.name, items: pick(st.equipment.filter((e) => !e.passive).map((e) => e.id)) });
+  }
+  if (stage.outlet.length) groups.push({ title: stage.stations.length > 1 ? 'Общее после линий' : 'Общее на выходе', items: pick(stage.outlet.map((e) => e.id)) });
+  for (const side of stage.sides) {
+    groups.push({ title: `В стороне от потока: ${side.equipment.name.toLowerCase()}`, note: side.equipment.type.side?.about, items: pick([side.equipment.id]) });
+  }
+  // то, чего нет в устройстве участка (на всякий случай), — в конце
+  const shown = new Set(groups.flatMap((g) => g.items.map((e) => e.id)));
+  const rest = list.filter((e) => !shown.has(e.id));
+  if (rest.length) groups.push({ title: 'Прочее', items: rest });
+  return groups.filter((g) => g.items.length);
+}
+
 function EquipmentTable({ d }: { d: AreaDetail }) {
+  const model = usePlantModel();
+  const groups = groupEquipment(model, d.area, d.equipment);
   return (
     <table className={cx('w-full table-fixed border-collapse text-left', ROW_TEXT)}>
       <thead>
@@ -57,38 +88,44 @@ function EquipmentTable({ d }: { d: AreaDetail }) {
         </tr>
       </thead>
       <tbody>
-        {d.equipment.map((e) => {
-          const st = e.status ? EQUIPMENT_STATUS[e.status] : null;
-          const ev = lastEvent(d, e);
-          return (
-            <tr key={e.id} className="border-t border-line">
-              <td className={cx(TD, 'font-medium')}>{e.name}</td>
-              <td className={TD}>
-                {st ? (
-                  <StatusMark status={st} extra={e.code ? `код ${e.code}` : undefined} wrap />
-                ) : (
-                  <span className="text-ink-3">нет данных контроллера</span>
-                )}
-              </td>
-              <td className={cx(TD, 'num whitespace-nowrap')}>
-                <Resource e={e} />
-              </td>
-              <td className={cx(TD, 'text-ink-2')} title={ev?.full}>
-                {ev ? (
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {ev.source && <SourceBadge source={ev.source} compact />}
-                    <span className="num shrink-0 text-ink-3">{ev.at}</span>
-                    <span className="truncate">{ev.text}</span>
-                  </span>
-                ) : (
-                  <span className="text-ink-3">—</span>
-                )}
+        {groups.flatMap((g) => [
+          g.title ? (
+            <tr key={`g-${g.title}`} className="border-t border-line">
+              <td colSpan={4} className="pb-0.5 pt-2.5 text-sm font-semibold text-ink-2">
+                {g.title}
+                {g.note && <span className="font-normal text-ink-3"> — {g.note}</span>}
               </td>
             </tr>
-          );
-        })}
+          ) : null,
+          ...g.items.map((e) => <EquipmentLine key={e.id} d={d} e={e} />),
+        ])}
       </tbody>
     </table>
+  );
+}
+
+function EquipmentLine({ d, e }: { d: AreaDetail; e: EquipmentRow }) {
+  const st = e.status ? EQUIPMENT_STATUS[e.status] : null;
+  const ev = lastEvent(d, e);
+  return (
+    <tr className="border-t border-line">
+      <td className={cx(TD, 'font-medium')}>{e.name}</td>
+      <td className={TD}>{st ? <StatusMark status={st} extra={e.code ? `код ${e.code}` : undefined} wrap /> : <span className="text-ink-3">нет данных контроллера</span>}</td>
+      <td className={cx(TD, 'num whitespace-nowrap')}>
+        <Resource e={e} />
+      </td>
+      <td className={cx(TD, 'text-ink-2')} title={ev?.full}>
+        {ev ? (
+          <span className="flex min-w-0 items-center gap-1.5">
+            {ev.source && <SourceBadge source={ev.source} compact />}
+            <span className="num shrink-0 text-ink-3">{ev.at}</span>
+            <span className="truncate">{ev.text}</span>
+          </span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        )}
+      </td>
+    </tr>
   );
 }
 

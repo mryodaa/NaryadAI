@@ -13,6 +13,8 @@ export function demoState(ctx: Ctx) {
     paused: c.paused,
     stage: c.stage,
     scenario: c.scenario,
+    simulateAll: c.simulateAll,
+    plantVersion: ctx.plant.config.version,
     speeds: SPEEDS,
     scenarios: SCENARIOS,
     stages: STAGES,
@@ -50,6 +52,12 @@ export function demoRoutes(app: FastifyInstance, ctx: Ctx) {
       return reply.code(400).send({ error: 'validation_failed', message: `Сценарий: ${SCENARIO_IDS.join(', ')}` });
     }
     ctx.resetRun(b.scenario as ScenarioId);
+    return demoState(ctx);
+  });
+
+  app.post('/api/v1/demo/simulate-all', async (req) => {
+    const b = (req.body ?? {}) as { on?: boolean };
+    ctx.clock.setSimulateAll(b.on === true);
     return demoState(ctx);
   });
 

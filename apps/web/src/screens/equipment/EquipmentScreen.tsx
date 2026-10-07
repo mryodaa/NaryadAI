@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CircleCheck, OctagonX, TriangleAlert, Wrench } from 'lucide-react';
-import { AREA_BY_ID } from '@allur/contracts/ref';
+import { stageShort, usePlantModel } from '../../state/plant';
 import { api } from '../../api/client';
 import type { EquipmentOverview } from '../../api/types';
 import { Card } from '../../components/ui';
@@ -19,6 +19,7 @@ const RISK = {
 
 export function EquipmentScreen() {
   const q = useQuery({ queryKey: ['equipment'], queryFn: () => api<EquipmentOverview>('/api/v1/equipment'), refetchInterval: 5000 });
+  const model = usePlantModel();
   const [incident, setIncident] = useState<string | null>(null);
   const d = q.data;
   if (!d) return <Booting />;
@@ -70,7 +71,7 @@ export function EquipmentScreen() {
                 <tr key={e.id} className="border-b border-line last:border-0">
                   <td className="px-4 py-3 align-top">
                     <div className="font-semibold">{e.name}</div>
-                    <div className="text-sm text-ink-3">{AREA_BY_ID[e.area].short}</div>
+                    <div className="text-sm text-ink-3">{stageShort(model, e.area)}</div>
                   </td>
                   <td className="w-[22rem] px-4 py-3 align-top">
                     {e.resourceLeft !== null ? (
