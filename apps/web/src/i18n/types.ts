@@ -111,7 +111,10 @@ export interface Translations {
     attentionNone: string;
     investigate: string;
     follow: string;
+    /** Кнопка в карточке, пока слежение включено */
     following: string;
+    /** Начало плашки слежения: «Слежение: Onix …004812» */
+    followingBar: string;
     areaHighlighted: string;
     returnToCar: string;
     stopFollow: string;

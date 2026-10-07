@@ -37,7 +37,7 @@ export function FollowBar({ className }: { className?: string }) {
       <div role="status" className={cx('view-in pointer-events-auto inline-flex max-w-full items-center gap-2 rounded-xl bg-accent-bg py-1 pl-3 pr-1 text-[0.9375rem] text-accent-ink shadow-card ring-1 ring-accent', className)}>
         <Crosshair className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />
         <span className="min-w-0 truncate">
-          <b>{t.shop.following}: {name}</b>
+          <b>{t.shop.followingBar}: {name}</b>
           {where && <span> · {where}</span>}
           {mode === 'panel' && <span className="text-accent-ink/80"> · {t.shop.areaHighlighted}</span>}
         </span>

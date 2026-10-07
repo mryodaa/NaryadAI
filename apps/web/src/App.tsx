@@ -19,6 +19,7 @@ import { closePassport, useView } from './state/view';
 import { startCarTracking } from './state/watch';
 import { WatchToast } from './components/Watch';
 import { useTranslation } from './i18n/store';
+import { AccessGate } from './components/AccessGate';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -49,7 +50,8 @@ function Shell() {
   );
 }
 
-export function App() {
+/** Приложение после входа: только тогда подключаемся к данным двойника */
+function Authed() {
   useEffect(() => {
     startCarTracking();
     connectLive();
@@ -63,5 +65,13 @@ export function App() {
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
+  );
+}
+
+export function App() {
+  return (
+    <AccessGate>
+      <Authed />
+    </AccessGate>
   );
 }
