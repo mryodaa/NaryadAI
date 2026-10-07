@@ -1,14 +1,14 @@
 // 3D-модель цеха (отдельный чанк, грузится лениво). Состояние — те же данные, что у «Панели»:
 // снимок двойника, детали участков, инциденты. Клик по зоне — панель участка, по плашке — инцидент.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Canvas, invalidate } from '@react-three/fiber';
-import { ArrowLeft, Info, MousePointerClick, Route, WifiOff, X } from 'lucide-react';
-import { MODEL_BY_ID, inflectLower, type AreaId, type BodyView, type LiveSnapshot } from '@allur/contracts/ref';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Canvas, useThree } from '@react-three/fiber';
+import { ArrowLeft, CircleHelp, Info, Mouse, MousePointerClick, Route, WifiOff, X } from 'lucide-react';
+import { MODEL_BY_ID, inflectLower, type AreaId, type BodyDetail, type BodyView, type LiveSnapshot } from '@allur/contracts/ref';
 import { useLive } from '../../state/live';
 import { usePlantModel } from '../../state/plant';
-import { backToPlant, clearVinPath, openAreaPanel, selectArea, setTour, useView } from '../../state/view';
+import { backToPlant, clearCarPath, openAreaPanel, selectArea, selectCar, setTour, useView } from '../../state/view';
 import { EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
-import { BODIES, num, pct0, plural } from '../../lib/format';
+import { num, pct0 } from '../../lib/format';
 import { buildLayout, type PlantLayout } from './layout';
 import { readPalette } from './palette';
 import { BodyFlow } from './flow';
@@ -16,17 +16,35 @@ import { useSceneData, type SceneData } from './useSceneData';
 import { Scene } from './Scene';
 import { CameraRig, type Insets } from './CameraRig';
 import type { HoverTarget } from './equipment';
+import { cameraCommands, hintSeen, markHintSeen, notePointerDown } from './controls';
+import { escLayerOpen, useEscLayer } from '../../components/overlay';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../api/client';
+import { shortVin } from '../../state/cars';
+import { hoverPickable, setHover, useHover } from './hover';
+import { FilterBar } from './FilterBar';
+import { ReplayBar } from './ReplayBar';
+import { buildReplay } from './replay';
+import { useReplay } from '../../state/replay';
+import { FollowBar } from '../../screens/shop/FollowBar';
+import { useTranslation } from '../../i18n/store';
+import { translateArea, translateDynamicText, translateEquipmentStatus, translateStatus } from '../../i18n/translator';
+import type { Lang } from '../../i18n/types';
 
 /** Пресеты камеры: весь цех и каждый производственный участок */
-function presets(layout: PlantLayout): { label: string; area: AreaId | null }[] {
-  return [{ label: 'Весь цех', area: null }, ...layout.producing.map((id) => ({ label: layout.names[id]?.short ?? id, area: id }))];
+function presets(layout: PlantLayout, lang: Lang): { label: string; area: AreaId | null }[] {
+  const entireShop = lang === 'kk' ? 'Бүкіл цех' : lang === 'en' ? 'Entire shop' : 'Весь цех';
+  return [{ label: entireShop, area: null }, ...layout.producing.map((id) => ({ label: translateArea(id, lang, 'short') || layout.names[id]?.short || id, area: id }))];
 }
 
 /** «Очередь перед окраской» */
-function bufferName(layout: PlantLayout, id: string): string {
+function bufferName(layout: PlantLayout, id: string, lang: Lang): string {
   const to = layout.bufferOrder.find((b) => b.id === id)?.to;
-  const short = to ? layout.names[to]?.short : undefined;
-  return short ? `Очередь перед ${inflectLower(short, 'ins')}` : 'Очередь';
+  const short = to ? (translateArea(to, lang, 'short') || layout.names[to]?.short) : undefined;
+  if (!short) return lang === 'kk' ? 'Кезек' : lang === 'en' ? 'Queue' : 'Очередь';
+  if (lang === 'kk') return `${short} алдындағы кезек`;
+  if (lang === 'en') return `Queue before ${short}`;
+  return `Очередь перед ${inflectLower(short, 'ins')}`;
 }
 
 export default function Plant3DView({ active, onLost }: { active: boolean; onLost: () => void }) {
@@ -40,36 +58,49 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
   const layout = useMemo(() => buildLayout(model), [model]);
   const palette = useMemo(readPalette, []);
   const flow = useMemo(() => new BodyFlow(layout), [layout]);
-  const bodies = useLive((x) => x.bodies);
   const data = useSceneData(s);
   const area = useView((v) => v.area);
   const equipment = useView((v) => v.equipment);
   const tour = useView((v) => v.tour);
-  const vinPath = useView((v) => v.vinPath);
+  const carPath = useView((v) => v.carPath);
+  // повтор истории: снимок маршрута на момент запуска (дальше история не нужна — повтор не «живой»)
+  const replayId = useReplay((r) => r.bodyId);
+  const replayQ = useQuery({
+    queryKey: ['replay', replayId],
+    queryFn: () => api<BodyDetail>(`/api/v1/bodies/${encodeURIComponent(replayId!)}`),
+    enabled: !!replayId,
+    staleTime: Infinity,
+  });
+  const replay = useMemo(() => (replayId && replayQ.data?.bodyId === replayId ? buildReplay(replayQ.data, layout, model) : null), [replayId, replayQ.data, layout, model]);
+  const stageName = useCallback((id: string) => layout.names[id]?.short ?? id, [layout]);
+  // повтор начался — показываем весь цех: путь машины виден целиком
+  useEffect(() => {
+    if (replayId && active) cameraCommands()?.home();
+  }, [replayId, active]);
+  // маршрут машины для пути — тот же запрос и кэш, что у карточки
+  const pathQ = useQuery({
+    queryKey: ['body', carPath],
+    queryFn: () => api<BodyDetail>(`/api/v1/bodies/${encodeURIComponent(carPath!)}`),
+    enabled: !!carPath,
+    refetchInterval: 3000,
+  });
+  const car = useView((v) => v.car);
   const conn = useLive((x) => x.conn);
   const reducedMotion = useReducedMotion();
   const hostRef = useRef<HTMLDivElement>(null);
   const insets = useInsets(hostRef, active);
-  const [hover, setHover] = useState<HoverTarget | null>(null);
   const pointer = useRef({ x: 0, y: 0 });
   const tipRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
   const showFps = useMemo(() => new URLSearchParams(location.search).has('fps'), []);
 
-  // кузова: каждое обновление трекера доводит картинку до состояния данных
-  useEffect(() => {
-    flow.update(bodies, performance.now(), reducedMotion);
-    invalidate();
-  }, [bodies, flow, reducedMotion]);
-
   // Esc: сначала закрывается открытое окно (у него свой обработчик), потом — возврат к общему плану
   useEffect(() => {
     if (!active) return;
     const h = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || document.querySelector('[role=dialog], [data-esc-layer]')) return;
+      if (e.key !== 'Escape' || e.defaultPrevented || escLayerOpen()) return;
       const v = useView.getState();
-      if (v.vinPath) clearVinPath();
-      else if (v.area || v.equipment) backToPlant();
+      if (v.area || v.equipment) backToPlant();
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -103,11 +134,32 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
     };
   }, [tour, active]);
 
+  // курсор как в картах: «рука» над сценой, «сжатая рука» при перемещении, «палец» над тем, что можно выбрать.
+  // Меняется напрямую в DOM: движение мыши не перерисовывает сцену
+  const dragging = useRef(false);
+  const syncCursor = () => {
+    const host = hostRef.current;
+    if (host) host.style.cursor = dragging.current ? 'grabbing' : hoverPickable(useHover.getState().target) ? 'pointer' : 'grab';
+  };
   useEffect(() => {
-    if (!hover) document.body.style.removeProperty('cursor');
-    else document.body.style.cursor = hover.kind === 'zone' || hover.kind === 'equipment' ? 'pointer' : 'default';
-    return () => void document.body.style.removeProperty('cursor');
-  }, [hover]);
+    syncCursor();
+    const unsub = useHover.subscribe(syncCursor);
+    const up = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      syncCursor();
+    };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      unsub();
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      setHover(null);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const hint = useControlsHint(active);
 
   const moveTip = () => {
     const el = tipRef.current;
@@ -117,8 +169,8 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
     const x = pointer.current.x + 16 + el.offsetWidth > w ? pointer.current.x - el.offsetWidth - 12 : pointer.current.x + 16;
     el.style.transform = `translate(${Math.round(x)}px, ${Math.round(pointer.current.y + 16)}px)`;
   };
-  useEffect(moveTip, [hover]);
 
+  const { t, lang } = useTranslation();
   const incidentsOnScene = useMemo(() => data.plaques.map((p) => ({ id: p.incidentId, area: p.area })), [data.plaques]);
   const ghost = !(data.plcConnected && s.stage >= 1);
 
@@ -126,11 +178,34 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
     <section
       ref={hostRef}
       aria-label={sceneSummary(data)}
-      className="absolute inset-0 isolate overflow-hidden bg-page"
+      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Q E + - F Home Escape"
+      tabIndex={0}
+      data-scene-keys
+      className="absolute inset-0 isolate overflow-hidden bg-page focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-accent"
+      onPointerDownCapture={(e) => {
+        notePointerDown(e);
+        hint.dismiss();
+        if ((e.target as HTMLElement).tagName !== 'CANVAS') return;
+        if (e.button === 0) {
+          dragging.current = true;
+          syncCursor();
+        }
+        // клавиши управляют камерой, пока фокус на сцене
+        e.currentTarget.focus({ preventScroll: true });
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+      onWheel={hint.dismiss}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (sceneKey(e.nativeEvent)) {
+          e.preventDefault();
+          hint.dismiss();
+        }
+      }}
       onPointerMove={(e) => {
         const r = e.currentTarget.getBoundingClientRect();
         pointer.current = { x: e.clientX - r.left, y: e.clientY - r.top };
-        if (hover) moveTip();
+        moveTip();
       }}
       onPointerLeave={() => setHover(null)}
     >
@@ -154,69 +229,228 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
           focusArea={area}
           reducedMotion={reducedMotion}
           portal={labelsRef}
-          vinPath={vinPath}
+          pathDetail={carPath && pathQ.data?.bodyId === carPath ? pathQ.data : null}
+          replay={replay}
+          stageName={stageName}
+          selectedCar={car}
           onHover={setHover}
-          onPick={(a, eq) => openAreaPanel(a, eq)}
+          onPick={openAreaPanel}
+          onPickCar={selectCar}
         />
-        <CameraRig layout={layout} area={area} equipment={equipment} insets={insets} tour={tour} incidents={incidentsOnScene} onUserControl={() => setTour(false)} />
+        <BodiesSync flow={flow} reducedMotion={reducedMotion} />
+        <CameraRig layout={layout} flow={flow} area={area} equipment={equipment} insets={insets} tour={tour} incidents={incidentsOnScene} onUserControl={() => setTour(false)} />
         {showFps && <FpsProbe />}
       </Canvas>
       {/* подписи и плашки сцены — в постоянном слое поверх холста */}
       <div ref={labelsRef} className="pointer-events-none absolute inset-0 z-10 overflow-hidden" />
 
-      {hover && (
-        <div ref={tipRef} className="pointer-events-none absolute left-0 top-0 z-40 max-w-[18rem] rounded-xl bg-surface px-3 py-2 text-base shadow-pop ring-1 ring-line">
-          <TipContent hover={hover} data={data} snapshot={s} layout={layout} bodies={bodies} />
-        </div>
-      )}
+      <HoverTip tipRef={tipRef} onShow={moveTip} data={data} snapshot={s} layout={layout} />
 
       <div className="pointer-events-none absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 print:hidden">
         {conn !== 'open' && (
           <Chip tone="attention" icon={<WifiOff className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}>
-            Нет связи с двойником — показано последнее известное состояние
+            {lang === 'kk' ? 'Егізбен байланыс жоқ — соңғы белгілі күй көрсетілген' : lang === 'en' ? 'No connection to twin — showing last known state' : 'Нет связи с двойником — показано последнее известное состояние'}
           </Chip>
         )}
         {ghost && (
           <Chip icon={<Info className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}>
-            {s.stage === 0 ? 'Ступень 0 · ' : ''}Состояние оборудования определяется по проходу VIN (1С:MES)
+            {s.stage === 0 ? (lang === 'kk' ? '0-деңгей · ' : lang === 'en' ? 'Stage 0 · ' : 'Ступень 0 · ') : ''}
+            {lang === 'kk' ? 'Жабдық күйі VIN өтуі бойынша анықталады (1С:MES)' : lang === 'en' ? 'Equipment state determined by VIN pass (1C:MES)' : 'Состояние оборудования определяется по проходу VIN (1С:MES)'}
           </Chip>
         )}
-        {vinPath && (
-          <span className="view-in pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-accent-bg py-1 pl-3 pr-1 text-[0.9375rem] font-semibold text-accent-ink shadow-card ring-1 ring-accent">
-            <Route className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />
-            Путь кузова <span className="font-mono">{vinPath.vin}</span>
-            <button type="button" onClick={clearVinPath} aria-label="Скрыть путь кузова" className="grid size-7 place-items-center rounded-lg hover:bg-surface">
-              <X className="size-4" />
-            </button>
+        {carPath && <PathChip bodyId={carPath} />}
+        {tour && (
+          <Chip icon={<MousePointerClick className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}>
+            {lang === 'kk' ? 'Автокөрсетілім · тоқтату үшін кез келген басу' : lang === 'en' ? 'Autotour · click or key to stop' : 'Автопоказ · любой клик или клавиша — остановить'}
+          </Chip>
+        )}
+        {hint.shown && !tour && (
+          <span role="status" className="view-in inline-flex items-center gap-1.5 rounded-xl bg-ink/90 px-3 py-1.5 text-[0.9375rem] font-medium text-white shadow-card">
+            <Mouse className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />
+            {getControlsHint(lang)}
           </span>
         )}
-        {tour && (
-          <Chip icon={<MousePointerClick className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}>Автопоказ · любой клик или клавиша — остановить</Chip>
-        )}
-        <div data-occluder="bottom" className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-2xl bg-surface/90 p-1 shadow-card ring-1 ring-line backdrop-blur">
+        {active && replayId && <ReplayBar bodyId={replayId} replay={replay} loading={replayQ.isLoading} stageName={stageName} />}
+        {active && <FollowBar />}
+        <FilterBar />
+        <div data-occluder="bottom" className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-2xl bg-surface p-1 shadow-card ring-1 ring-line">
           {area && (
             <button type="button" onClick={backToPlant} className="inline-flex items-center gap-1 rounded-xl bg-ink px-3 py-1.5 text-base font-semibold text-white hover:bg-ink-2">
               <ArrowLeft className="size-4" strokeWidth={2.5} aria-hidden />
-              Вернуться к цеху
+              {lang === 'kk' ? 'Цехқа оралу' : lang === 'en' ? 'Back to plant' : 'Вернуться к цеху'}
             </button>
           )}
-          {presets(layout).map((p) => {
+          {presets(layout, lang).map((p) => {
             const on = p.area === area && !equipment;
             return (
               <button
                 key={p.label}
                 type="button"
                 aria-pressed={on}
-                onClick={() => (p.area ? selectArea(p.area) : backToPlant())}
+                // пресет кадрирует заново и тогда, когда участок уже выбран, а камеру увели (колесо, поиск)
+                onClick={() => (!p.area ? cameraCommands()?.home() : p.area === area ? cameraCommands()?.frame() : selectArea(p.area))}
                 className={cx('rounded-xl px-3 py-1.5 text-base font-semibold transition-colors', on ? 'bg-accent-bg text-accent-ink' : 'text-ink-2 hover:bg-surface-2 hover:text-ink')}
               >
                 {p.label}
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={hint.show}
+            aria-label={lang === 'kk' ? 'Камераны қалай басқару керек' : lang === 'en' ? 'Camera controls help' : 'Как управлять камерой'}
+            title={lang === 'kk' ? 'Камераны қалай басқару керек' : lang === 'en' ? 'Camera controls help' : 'Как управлять камерой'}
+            className="grid size-9 place-items-center rounded-xl text-ink-2 hover:bg-surface-2 hover:text-ink"
+          >
+            <CircleHelp className="size-5" strokeWidth={2.25} aria-hidden />
+          </button>
         </div>
       </div>
     </section>
+  );
+}
+
+/** Подсказка по управлению: на сенсорном экране — жесты пальцами */
+function getControlsHint(lang: Lang): string {
+  const isTouch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+  if (isTouch) {
+    if (lang === 'kk') return 'Бір саусақ: жылжыту · Екі саусақ: масштаб және бұру · Екі рет түрту: жақындату';
+    if (lang === 'en') return 'One finger: pan · Two fingers: zoom & rotate · Double tap: zoom in';
+    return 'Один палец: перемещение · Два пальца: масштаб и поворот · Двойное касание: приблизить';
+  }
+  if (lang === 'kk') return 'ТБТ: жылжыту · ОСТ: бұру · Дөңгелек: масштаб · Қос шерту: жақындату';
+  if (lang === 'en') return 'LMB: pan · RMB: rotate · Wheel: zoom · Double click: zoom in';
+  return 'ЛКМ: перемещение · ПКМ: поворот · Колесо: масштаб · Двойной клик: приблизить';
+}
+
+/** При первом открытии 3D — плашка с управлением; исчезает через 6 секунд или после первого действия */
+function useControlsHint(active: boolean) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!active || hintSeen()) return;
+    setShown(true);
+    markHintSeen();
+  }, [active]);
+  useEffect(() => {
+    if (!shown) return;
+    const t = window.setTimeout(() => setShown(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [shown]);
+  return {
+    shown,
+    show: () => setShown(true),
+    dismiss: () => setShown(false),
+  };
+}
+
+/**
+ * Клавиши камеры, когда фокус на сцене (по физической клавише — работает и в русской раскладке):
+ * стрелки и WASD — перемещение, Q/E — поворот, +/− — масштаб, F — к выбранному, Home — весь цех.
+ */
+function sceneKey(e: KeyboardEvent): boolean {
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  const cam = cameraCommands();
+  if (!cam) return false;
+  const step = e.shiftKey ? 0.3 : 0.12;
+  switch (e.code) {
+    case 'ArrowLeft':
+    case 'KeyA':
+      cam.pan(-step, 0);
+      return true;
+    case 'ArrowRight':
+    case 'KeyD':
+      cam.pan(step, 0);
+      return true;
+    case 'ArrowUp':
+    case 'KeyW':
+      cam.pan(0, step);
+      return true;
+    case 'ArrowDown':
+    case 'KeyS':
+      cam.pan(0, -step);
+      return true;
+    case 'KeyQ':
+      cam.rotate(0.2);
+      return true;
+    case 'KeyE':
+      cam.rotate(-0.2);
+      return true;
+    case 'Equal':
+    case 'NumpadAdd':
+      cam.zoom(1);
+      return true;
+    case 'Minus':
+    case 'NumpadSubtract':
+      cam.zoom(-1);
+      return true;
+    case 'KeyF':
+      cam.focus();
+      return true;
+    case 'Home':
+      cam.home();
+      return true;
+  }
+  return false;
+}
+
+/** Кузова: каждое обновление трекера доводит картинку до состояния данных (без перерисовки сцены) */
+function BodiesSync({ flow, reducedMotion }: { flow: BodyFlow; reducedMotion: boolean }) {
+  const bodies = useLive((x) => x.bodies);
+  const invalidate = useThree((st) => st.invalidate);
+  useEffect(() => {
+    flow.update(bodies, performance.now(), reducedMotion);
+    invalidate();
+  }, [bodies, flow, reducedMotion, invalidate]);
+  return null;
+}
+
+/** Подсказка при наведении: подписана на стор наведения сама, сцену не трогает */
+function HoverTip({
+  tipRef,
+  onShow,
+  data,
+  snapshot,
+  layout,
+}: {
+  tipRef: React.RefObject<HTMLDivElement | null>;
+  onShow: () => void;
+  data: SceneData;
+  snapshot: LiveSnapshot;
+  layout: PlantLayout;
+}) {
+  const hover = useHover((h) => h.target);
+  const bodies = useLive((x) => (hover?.kind === 'body' ? x.bodies : null));
+  useEffect(onShow, [hover]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!hover) return null;
+  return (
+    <div ref={tipRef} className="pointer-events-none absolute left-0 top-0 z-40 max-w-[18rem] rounded-xl bg-surface px-3 py-2 text-base shadow-pop ring-1 ring-line">
+      <TipContent hover={hover} data={data} snapshot={snapshot} layout={layout} bodies={bodies ?? []} />
+    </div>
+  );
+}
+
+/** Плашка пути: чья машина; крестик и Esc скрывают путь */
+function PathChip({ bodyId }: { bodyId: string }) {
+  const { t, lang } = useTranslation();
+  const car = useLive((x) => x.bodies.find((b) => b.bodyId === bodyId));
+  useEscLayer(clearCarPath);
+  const carName = car ? `${MODEL_BY_ID[car.model].short} ${shortVin(car)}` : bodyId;
+  const pathTitle = lang === 'kk' ? `Шанақ бағыты: ${carName}` : lang === 'en' ? `Car route: ${carName}` : `Путь машины ${carName}`;
+  const legend = lang === 'kk'
+    ? '· өткені — тұтас, алда — үзік, қайталау — қызғылт сары'
+    : lang === 'en'
+    ? '· completed — solid, ahead — dashed, loops — orange'
+    : '· пройдено — линия, впереди — пунктир, петли — оранжевым';
+
+  return (
+    <span className="view-in pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-accent-bg py-1 pl-3 pr-1 text-[0.9375rem] font-semibold text-accent-ink shadow-card ring-1 ring-accent">
+      <Route className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />
+      {pathTitle}
+      <span className="font-normal text-accent-ink/80">{legend}</span>
+      <button type="button" onClick={clearCarPath} aria-label={t.common.close} className="grid size-7 place-items-center rounded-lg hover:bg-surface">
+        <X className="size-4" />
+      </button>
+    </span>
   );
 }
 
@@ -236,6 +470,7 @@ function Chip({ children, icon, tone }: { children: ReactNode; icon: ReactNode; 
 
 /** Подсказка при наведении: название, статус, выпуск и главный показатель — те же, что в «Панели» */
 function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTarget; data: SceneData; snapshot: LiveSnapshot; layout: PlantLayout; bodies: BodyView[] }) {
+  const { t, lang } = useTranslation();
   if (hover.kind === 'body') {
     const b = bodies.find((x) => x.bodyId === hover.id);
     return b ? <BodyTip b={b} layout={layout} data={data} now={snapshot.now} /> : null;
@@ -244,21 +479,30 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
     const r = data.rows[hover.id];
     if (!r) return null;
     const Icon = r.status.icon;
+    const localizedZoneName = translateArea(hover.id, lang, 'name') || r.name;
     return (
       <div className="flex flex-col gap-1 leading-snug">
-        <div className="font-semibold text-ink">{r.name}</div>
+        <div className="font-semibold text-ink">{localizedZoneName}</div>
         <div className={cx('inline-flex items-center gap-1.5 font-semibold', r.status.tone === 'neutral' ? 'text-st-neutral-ink' : TONE_CLASS[r.status.tone].ink)}>
           <Icon className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />
-          {r.status.label}
+          {translateStatus(r.status.label, lang)}
         </div>
         {r.output && (
           <div className="num text-ink-2">
-            Выпуск <span className="font-semibold text-ink">{r.output.done}</span> из {r.output.plan} к этому моменту
+            {lang === 'kk' ? (
+              <>Шығарылым <span className="font-semibold text-ink">{r.output.done}</span> / {r.output.plan} қазіргі сәтке</>
+            ) : lang === 'en' ? (
+              <>Output <span className="font-semibold text-ink">{r.output.done}</span> of {r.output.plan} to now</>
+            ) : (
+              <>Выпуск <span className="font-semibold text-ink">{r.output.done}</span> из {r.output.plan} к этому моменту</>
+            )}
           </div>
         )}
-        {r.metric && <div className={r.metric.tone === 'neutral' ? 'text-ink-2' : TONE_CLASS[r.metric.tone].ink}>{r.metric.text}</div>}
-        {r.reason && <div className={cx('text-sm', r.reason.tone === 'neutral' ? 'text-ink-2' : TONE_CLASS[r.reason.tone].ink)}>{r.reason.text}</div>}
-        <div className="text-sm text-ink-3">Клик — панель участка</div>
+        {r.metric && <div className={r.metric.tone === 'neutral' ? 'text-ink-2' : TONE_CLASS[r.metric.tone].ink}>{translateDynamicText(r.metric.text, lang)}</div>}
+        {r.reason && <div className={cx('text-sm', r.reason.tone === 'neutral' ? 'text-ink-2' : TONE_CLASS[r.reason.tone].ink)}>{translateDynamicText(r.reason.text, lang)}</div>}
+        <div className="text-sm text-ink-3">
+          {lang === 'kk' ? 'Шерту — учаске панелі' : lang === 'en' ? 'Click — area panel' : 'Клик — панель участка'}
+        </div>
       </div>
     );
   }
@@ -271,16 +515,24 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
         <div className="font-semibold text-ink">{e?.name ?? hover.id}</div>
         {live && st ? (
           <div className={cx('font-semibold', st.tone === 'neutral' ? 'text-st-neutral-ink' : TONE_CLASS[st.tone].ink)}>
-            {st.label}
-            {e?.code ? ` · код ${e.code}` : ''}
+            {translateEquipmentStatus(st.label, lang)}
+            {e?.code ? ` · ${lang === 'kk' ? 'код:' : lang === 'en' ? 'code' : 'код'} ${e.code}` : ''}
           </div>
         ) : (
-          <div className="text-ink-3">нет данных контроллера — состояние по 1С:MES</div>
+          <div className="text-ink-3">
+            {lang === 'kk' ? 'контроллер дерегі жоқ — күй 1С:MES бойынша' : lang === 'en' ? 'no PLC telemetry — state via 1C:MES' : 'нет данных контроллера — состояние по 1С:MES'}
+          </div>
         )}
-        {live && e?.text && e.status !== 'run' && <div className="text-sm text-ink-2">{e.text}</div>}
-        {e?.resourceLeft !== null && e?.resourceLeft !== undefined && <div className="num text-ink-2">ресурс до ТО {pct0(e.resourceLeft)}</div>}
-        {live && e?.dp !== null && e?.dp !== undefined && <div className="num text-ink-2">фильтр {num(e.dp)} Па · норма до 250</div>}
-        <div className="text-sm text-ink-3">Клик — панель участка</div>
+        {live && e?.text && e.status !== 'run' && <div className="text-sm text-ink-2">{translateDynamicText(e.text, lang)}</div>}
+        {e?.resourceLeft !== null && e?.resourceLeft !== undefined && <div className="num text-ink-2">{t.shop.resourceToMaint(pct0(e.resourceLeft))}</div>}
+        {live && e?.dp !== null && e?.dp !== undefined && (
+          <div className="num text-ink-2">
+            {lang === 'kk' ? 'сүзгі' : lang === 'en' ? 'filter' : 'фильтр'} {num(e.dp)} {lang === 'en' ? 'Pa' : 'Па'} · {t.shop.normUpTo(250)}
+          </div>
+        )}
+        <div className="text-sm text-ink-3">
+          {lang === 'kk' ? 'Шерту — учаске панелі' : lang === 'en' ? 'Click — area panel' : 'Клик — панель участка'}
+        </div>
       </div>
     );
   }
@@ -289,9 +541,9 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
     if (!b) return null;
     return (
       <div className="leading-snug">
-        <div className="font-semibold text-ink">{bufferName(layout, b.id)}</div>
+        <div className="font-semibold text-ink">{bufferName(layout, b.id, lang)}</div>
         <div className="num text-ink-2">
-          В очереди {b.count} {plural(b.count, BODIES)} из {b.capacity}
+          {t.panel.inQueue(b.count, b.capacity)}
         </div>
       </div>
     );
@@ -300,10 +552,10 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
   if (!sensor) return null;
   return (
     <div className="flex flex-col gap-0.5 leading-snug">
-      <div className="font-semibold text-ink">{sensor.label}</div>
+      <div className="font-semibold text-ink">{translateDynamicText(sensor.label, lang)}</div>
       {sensor.values.map((v) => (
         <div key={v.name} className="num text-ink-2">
-          {v.name}: <span className="font-semibold text-ink">{v.value}</span>
+          {translateDynamicText(v.name, lang)}: <span className="font-semibold text-ink">{v.value}</span>
         </div>
       ))}
     </div>
@@ -319,21 +571,31 @@ function sceneSummary(data: SceneData): string {
 
 /** Подсказка кузова: модель и VIN, цвет из заказа, где он и сколько там против нормы */
 function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; data: SceneData; now: string }) {
+  const { t, lang } = useTranslation();
   const stage = layout.names[b.loc.stageId];
+  const stageName = translateArea(b.loc.stageId, lang, 'short') || stage?.short || b.loc.stageId;
   const eq = b.loc.equipmentId ? (data.equipment[b.loc.equipmentId]?.name ?? layout.equipment.find((e) => e.id === b.loc.equipmentId)?.name) : undefined;
   const min = Math.max(0, Math.round((Date.parse(now) - Date.parse(b.since)) / 60_000));
   const norm = b.normSec ? Math.max(1, Math.round(b.normSec / 60)) : null;
   const delayed = b.flags.includes('delayed');
   let where: string;
-  if (b.loc.kind === 'warehouse') where = 'Машинокомплект на складе, ждёт выдачи на сварку';
-  else if (b.loc.kind === 'finished') where = 'На складе готовой продукции';
-  else if (b.loc.kind === 'buffer') where = `В очереди после участка «${stage?.short ?? b.loc.stageId}»`;
-  else if (b.loc.precision === 'stage') where = `${stage?.short ?? b.loc.stageId} (точное место не отмечено${eq ? `, по норме времени — ${eq}` : ''})`;
-  else where = `${stage?.short ?? b.loc.stageId}${eq ? `, ${eq}` : ''}`;
+  if (b.loc.kind === 'warehouse') where = lang === 'kk' ? 'Қоймадағы машина жиынтығы, дәнекерлеуге берілуін күтуде' : lang === 'en' ? 'Assembly kit in warehouse, waiting for welding' : 'Машинокомплект на складе, ждёт выдачи на сварку';
+  else if (b.loc.kind === 'finished') where = lang === 'kk' ? 'Дайын өнімдер қоймасында' : lang === 'en' ? 'In finished goods warehouse' : 'На складе готовой продукции';
+  else if (b.loc.kind === 'buffer') where = lang === 'kk' ? `«${stageName}» учаскесінен кейінгі кезекте` : lang === 'en' ? `In queue after area "${stageName}"` : `В очереди после участка «${stageName}»`;
+  else if (b.loc.precision === 'stage') {
+    const unspec = lang === 'kk' ? 'нақты орны белгіленбеген' : lang === 'en' ? 'exact location not marked' : 'точное место не отмечено';
+    const normEq = eq ? (lang === 'kk' ? `, уақыт нормасы бойынша — ${eq}` : lang === 'en' ? `, by time standard — ${eq}` : `, по норме времени — ${eq}`) : '';
+    where = `${stageName} (${unspec}${normEq})`;
+  } else where = `${stageName}${eq ? `, ${eq}` : ''}`;
+
+  const nonconformityText = lang === 'kk' ? 'сәйкессіздік бар' : lang === 'en' ? 'nonconformity' : 'есть несоответствие';
+  const reworkText = lang === 'kk' ? 'қайта өңдеу' : lang === 'en' ? 'rework pass' : 'повторный проход';
+  const restoredText = lang === 'kk' ? 'белгілердің бір бөлігі бағыт бойынша қалпына келтірілді' : lang === 'en' ? 'some marks restored along route' : 'часть отметок восстановлена по маршруту';
+
   return (
     <div className="flex flex-col gap-1 leading-snug">
       <div className="font-semibold text-ink">
-        {MODEL_BY_ID[b.model].name} · {b.vin ? `VIN …${b.vin.slice(-5)}` : `кузов ${b.bodyId}`}
+        {MODEL_BY_ID[b.model].name} · {b.vin ? `VIN …${b.vin.slice(-5)}` : `${lang === 'kk' ? 'шанақ' : lang === 'en' ? 'body' : 'кузов'} ${b.bodyId}`}
       </div>
       <div className="flex items-center gap-1.5 text-ink-2">
         {b.color ? (
@@ -342,19 +604,23 @@ function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; d
             {b.color.name}
           </>
         ) : (
-          <span className="text-ink-3">Цвет не передан из 1С</span>
+          <span className="text-ink-3">{lang === 'kk' ? 'Түс 1С-тен берілмеген' : lang === 'en' ? 'Color not specified in 1C' : 'Цвет не передан из 1С'}</span>
         )}
       </div>
       <div className="text-ink-2">{where}</div>
       <div className={cx('num', delayed ? cx('font-semibold', TONE_CLASS.attention.ink) : 'text-ink-2')}>
-        {min} мин{norm && b.loc.kind !== 'buffer' ? ` из ${norm} по норме` : b.loc.kind === 'buffer' ? ' в очереди' : ''}
-        {delayed ? ' · задерживается' : ''}
+        {min} {t.common.minuteUnit}
+        {norm && b.loc.kind !== 'buffer' ? (lang === 'kk' ? ` / норма ${norm}` : lang === 'en' ? ` of ${norm} target` : ` из ${norm} по норме`) : b.loc.kind === 'buffer' ? (lang === 'kk' ? ' кезекте' : lang === 'en' ? ' in queue' : ' в очереди') : ''}
+        {delayed ? (lang === 'kk' ? ' · кешігуде' : lang === 'en' ? ' · delayed' : ' · задерживается') : ''}
       </div>
       {(b.flags.includes('nonconformity') || b.flags.includes('rework') || b.flags.includes('restored_checkpoint')) && (
         <div className="text-sm text-ink-3">
-          {[b.flags.includes('nonconformity') && 'есть несоответствие', b.flags.includes('rework') && 'повторный проход', b.flags.includes('restored_checkpoint') && 'часть отметок восстановлена по маршруту'].filter(Boolean).join(' · ')}
+          {[b.flags.includes('nonconformity') && nonconformityText, b.flags.includes('rework') && reworkText, b.flags.includes('restored_checkpoint') && restoredText].filter(Boolean).join(' · ')}
         </div>
       )}
+      <div className="text-sm text-ink-3">
+        {lang === 'kk' ? 'Шерту — шанақ карточкасы' : lang === 'en' ? 'Click — car card' : 'Клик — карточка машины'}
+      </div>
     </div>
   );
 }

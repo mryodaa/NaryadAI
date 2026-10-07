@@ -9,11 +9,14 @@ import { Button, Card } from '../../components/ui';
 import { useLive } from '../../state/live';
 import { cx } from '../../lib/tones';
 import { money, speedLabel } from '../../lib/format';
+import { useI18n } from '../../i18n/store';
+import { translateDynamicText } from '../../i18n/translator';
 
 /** Шлюз принимает ускорение до ×600 */
 const SPEED_MAX = 600;
 
 export function SettingsScreen() {
+  const { t, lang } = useI18n();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['settings'], queryFn: () => api<SettingsResponse>('/api/v1/settings') });
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -27,13 +30,13 @@ export function SettingsScreen() {
   const d = q.data;
   return (
     <main className="flex flex-col gap-4 px-4 pb-6 pt-3 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">Допущения и параметры</h1>
+      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.settings.title}</h1>
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4">
         <div className="flex flex-col gap-4">
           <SpeedCard />
           <Card className="p-4">
-            <h2 className="text-[1.125rem] font-semibold">Деньги</h2>
-            <p className="mb-3 text-base text-st-attention-ink">Условно, уточняется с заводом. По этим значениям двойник считает потери и сравнивает варианты решений.</p>
+            <h2 className="text-[1.125rem] font-semibold">{t.settings.moneyTitle}</h2>
+            <p className="mb-3 text-base text-st-attention-ink">{t.settings.moneyDesc}</p>
             {d && (
               <form
                 className="flex flex-col gap-2.5"
@@ -44,7 +47,7 @@ export function SettingsScreen() {
               >
                 {Object.keys(d.money).map((k) => (
                   <label key={k} className="grid grid-cols-[minmax(0,1fr)_11rem] items-center gap-3">
-                    <span className="leading-snug">{d.labels[k]}</span>
+                    <span className="leading-snug">{translateDynamicText(d.labels[k], lang)}</span>
                     <span className="flex items-center gap-1.5">
                       <input
                         inputMode="numeric"
@@ -58,33 +61,32 @@ export function SettingsScreen() {
                 ))}
                 <div className="mt-2 flex items-center gap-2">
                   <Button type="submit" variant="primary">
-                    {save.isPending ? 'Сохраняю…' : 'Сохранить'}
+                    {save.isPending ? t.settings.savingButton : t.settings.saveButton}
                   </Button>
                   <button
                     type="button"
                     onClick={() => setDraft(Object.fromEntries(Object.entries(d.defaults).map(([k, v]) => [k, String(v)])))}
                     className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 font-semibold text-accent-ink hover:bg-accent-bg"
                   >
-                    <RotateCcw className="size-4" /> Значения по умолчанию
+                    <RotateCcw className="size-4" /> {t.settings.defaultsButton}
                   </button>
-                  {save.isSuccess && <span className="text-ink-2">Сохранено — прогнозы пересчитаны</span>}
+                  {save.isSuccess && <span className="text-ink-2">{t.settings.savedNote}</span>}
                   {save.isError && <span className="font-medium text-st-fault-ink">{(save.error as Error).message}</span>}
                 </div>
-                <p className="mt-1 text-sm text-ink-3">Например, недовыпуск одной машины сейчас стоит {money(d.money.carMargin ?? 0)} упущенной маржи.</p>
+                <p className="mt-1 text-sm text-ink-3">{t.settings.carMarginExample(money(d.money.carMargin ?? 0, lang))}</p>
               </form>
             )}
           </Card>
         </div>
         <Card className="p-4">
-          <h2 className="mb-2 text-[1.125rem] font-semibold">Допущения модели</h2>
+          <h2 className="mb-2 text-[1.125rem] font-semibold">{t.settings.assumptionsTitle}</h2>
           <ul className="list-disc space-y-1.5 pl-5 text-base leading-snug">
             {(d?.assumptions ?? []).map((a, i) => (
-              <li key={i}>{a}</li>
+              <li key={i}>{translateDynamicText(a, lang)}</li>
             ))}
           </ul>
           <p className="mt-3 text-sm text-ink-3">
-            В интерфейсе не используются внутренние настройки систем Allur: типичная интеграция с 1С:MES/QLS/WMS, конкретная выгрузка настраивается со специалистами завода. Найденные
-            противоречия в данных — на экране «Источники данных».
+            {t.settings.integrationNote}
           </p>
         </Card>
       </div>
@@ -94,6 +96,7 @@ export function SettingsScreen() {
 
 /** Во сколько раз время двойника идёт быстрее настоящего — для показа сценариев за минуты */
 function SpeedCard() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const speed = useLive((s) => s.snapshot?.speed ?? null);
   const paused = useLive((s) => s.snapshot?.paused ?? false);
@@ -111,13 +114,13 @@ function SpeedCard() {
 
   return (
     <Card className="p-4">
-      <h2 className="text-[1.125rem] font-semibold">Скорость времени двойника</h2>
+      <h2 className="text-[1.125rem] font-semibold">{t.settings.speedTitle}</h2>
       <p className="mb-3 text-base text-ink-2">
-        Во сколько раз время двойника идёт быстрее настоящего: ×1 — как на заводе, ×60 — час смены за минуту. Меняется сразу на всех экранах и в имитаторах.
+        {t.settings.speedDesc}
       </p>
       <div className="mb-3 text-base">
-        Сейчас: <span className="num font-semibold">{speed === null ? '—' : speedLabel(speed)}</span>
-        {paused && <span className="text-ink-2"> · время на паузе</span>}
+        {t.settings.speedCurrent(speed === null ? '—' : speedLabel(speed))}
+        {paused && <span className="text-ink-2"> · {t.settings.onPause}</span>}
       </div>
       <form
         className="flex flex-wrap items-center gap-2"
@@ -140,7 +143,7 @@ function SpeedCard() {
           />
         </label>
         <Button type="submit" variant="primary">
-          {apply.isPending ? 'Применяю…' : 'Применить'}
+          {apply.isPending ? t.settings.applyingButton : t.settings.applyButton}
         </Button>
         <span className="ml-1 flex gap-1">
           {SPEEDS.map((s) => (
@@ -155,9 +158,9 @@ function SpeedCard() {
           ))}
         </span>
       </form>
-      {filled && !valid && <p className="mt-2 text-base font-medium text-st-fault-ink">Нужно целое число от 1 до {SPEED_MAX}</p>}
+      {filled && !valid && <p className="mt-2 text-base font-medium text-st-fault-ink">{t.settings.speedValidation(SPEED_MAX)}</p>}
       {apply.isError && <p className="mt-2 text-base font-medium text-st-fault-ink">{(apply.error as Error).message}</p>}
-      <p className="mt-2 text-sm text-ink-3">Ночь и выходные двойник пропускает сам. После перезапуска шлюза скорость возвращается к START_SPEED (в облаке — ×60).</p>
+      <p className="mt-2 text-sm text-ink-3">{t.settings.speedNote}</p>
     </Card>
   );
 }

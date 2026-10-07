@@ -2,7 +2,7 @@
 // так можно дать прямую ссылку на нужный режим. Ссылку читает стор при загрузке страницы.
 import { useEffect } from 'react';
 import { ENABLE_3D } from '../../lib/features';
-import { toggleViewMode, useView, type ViewMode } from '../../state/view';
+import { startFollow, stopFollow, toggleViewMode, useView, type ViewMode } from '../../state/view';
 
 /** Меняем только view, остальные параметры (например ?demo) оставляем как были */
 function searchWithView(search: string, mode: ViewMode): string {
@@ -25,13 +25,16 @@ export function useViewControls() {
   }, [mode]);
 
   useEffect(() => {
-    if (!ENABLE_3D) return;
     const h = (e: KeyboardEvent) => {
       // KeyV — та же клавиша в русской раскладке («м»); с Ctrl — это вставка, не трогаем
-      if (e.code !== 'KeyV' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      if ((e.code !== 'KeyV' && e.code !== 'KeyT') || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
       const el = e.target as HTMLElement;
       if (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
-      toggleViewMode();
+      if (e.code === 'KeyV') return toggleViewMode();
+      // T — следить за выбранной машиной; ещё раз — остановить
+      const v = useView.getState();
+      if (v.follow && v.follow.bodyId === v.car) stopFollow();
+      else if (v.car) startFollow(v.car);
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);

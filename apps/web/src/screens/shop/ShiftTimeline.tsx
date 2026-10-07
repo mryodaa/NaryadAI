@@ -1,9 +1,10 @@
-// Лента смены: шкала 8 часов, отрезки простоев и точки инцидентов по участкам, «сейчас» — линия.
 import type { LiveSnapshot, ShiftView } from '@allur/contracts/ref';
 import { Card } from '../../components/ui';
 import { usePlantModel } from '../../state/plant';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { timeHM } from '../../lib/format';
+import { useTranslation } from '../../i18n/store';
+import { translateArea, translateDynamicText } from '../../i18n/translator';
 
 const HOUR = 3_600_000;
 
@@ -18,6 +19,7 @@ export function ShiftTimeline({
   timeline: LiveSnapshot['timeline'];
   onIncident?: (id: string) => void;
 }) {
+  const { t, lang } = useTranslation();
   // строки ленты — производственные участки по потоку
   const rows = usePlantModel().production;
   const start = Date.parse(shift.startsAt);
@@ -29,7 +31,7 @@ export function ShiftTimeline({
   return (
     <Card className="px-4 pb-3 pt-3">
       <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5">
-        <div className="text-base font-semibold leading-tight">Лента смены</div>
+        <div className="text-base font-semibold leading-tight">{t.shop.timelineTitle}</div>
         <div className="relative h-5 text-sm text-ink-3">
           {hours.map((h, i) => (
             <span
@@ -43,7 +45,7 @@ export function ShiftTimeline({
         </div>
 
         {rows.map(({ id: area, short }) => (
-          <Row key={area} label={short}>
+          <Row key={area} label={translateArea(area, lang, 'short') || short}>
             <div className="absolute inset-0 rounded bg-surface-2" />
             <div className="absolute inset-y-0 right-0 rounded-r bg-[repeating-linear-gradient(135deg,transparent_0_6px,var(--line)_6px_7px)]" style={{ left: pos(nowMs) }} />
             {timeline.segments
@@ -51,10 +53,12 @@ export function ShiftTimeline({
               .map((s, i) => {
                 const from = Date.parse(s.from);
                 const to = s.to ? Date.parse(s.to) : nowMs;
+                const translatedLabel = translateDynamicText(s.label, lang);
+                const nowLabel = lang === 'kk' ? 'қазір' : lang === 'en' ? 'now' : 'сейчас';
                 return (
                   <div
                     key={i}
-                    title={`${s.label} (${timeHM(from)}–${s.to ? timeHM(to) : 'сейчас'})`}
+                    title={`${translatedLabel} (${timeHM(from)}–${s.to ? timeHM(to) : nowLabel})`}
                     className={cx(
                       'absolute min-w-[3px] rounded-[4px]',
                       TONE_CLASS[s.tone].solid,
@@ -71,7 +75,7 @@ export function ShiftTimeline({
                 <button
                   key={i}
                   type="button"
-                  title={`${m.label}, ${timeHM(m.at)}`}
+                  title={`${translateDynamicText(m.label, lang)}, ${timeHM(m.at)}`}
                   onClick={() => m.incidentId && onIncident?.(m.incidentId)}
                   className={cx('absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-surface', TONE_CLASS[m.tone].solid)}
                   style={{ left: pos(Date.parse(m.at)) }}
@@ -87,7 +91,7 @@ export function ShiftTimeline({
             className="num absolute top-0 -translate-x-1/2 rounded bg-ink px-1.5 text-sm font-semibold leading-5 text-white"
             style={{ left: pos(nowMs) }}
           >
-            сейчас {timeHM(nowMs)}
+            {t.shop.timelineNow(timeHM(nowMs))}
           </span>
         </div>
       </div>

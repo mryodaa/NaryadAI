@@ -99,6 +99,10 @@ export class TwinService {
     return this.twin.ready ? this.twin.bodies(now) : [];
   }
 
+  searchBodies(query: string, now: number, limit?: number) {
+    return this.twin.ready ? this.twin.searchBodies(query, now, limit) : [];
+  }
+
   body(idOrVin: string, now: number) {
     return this.twin.body(idOrVin, now);
   }

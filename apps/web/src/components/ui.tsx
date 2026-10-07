@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { CircleHelp, type LucideIcon } from 'lucide-react';
 import type { Tone } from '@allur/contracts/ref';
 import { TONE_CLASS, TONE_ICON, cx } from '../lib/tones';
+import { useTranslation } from '../i18n/store';
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return <div className={cx('rounded-2xl bg-surface shadow-card', className)}>{children}</div>;
@@ -35,7 +36,9 @@ export function StatusChip({
   );
 }
 
-export function WhyButton({ onClick, label = 'Почему?' }: { onClick?: () => void; label?: string }) {
+export function WhyButton({ onClick, label }: { onClick?: () => void; label?: string }) {
+  const { t } = useTranslation();
+  const text = label ?? t.common.why;
   return (
     <button
       type="button"
@@ -43,7 +46,7 @@ export function WhyButton({ onClick, label = 'Почему?' }: { onClick?: () =
       className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-base font-medium text-accent-ink hover:bg-accent-bg focus-visible:outline-2 focus-visible:outline-accent print:hidden"
     >
       <CircleHelp className="size-[1.05em]" strokeWidth={2.25} aria-hidden />
-      {label}
+      {text}
     </button>
   );
 }

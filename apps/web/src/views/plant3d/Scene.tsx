@@ -1,12 +1,12 @@
 // Сцена цеха: пол, зоны участков с контуром статуса, буферы, оборудование, кузова, плашки.
 // Состояние — только из данных двойника; переходы цвета и положения плавные.
-import { memo, useMemo, useRef, type RefObject } from 'react';
-import { useFrame, type ThreeEvent } from '@react-three/fiber';
+import { memo, useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Grid, Html, Line } from '@react-three/drei';
-import { Color, MeshBasicMaterial, MeshStandardMaterial, Object3D, type InstancedMesh } from 'three';
+import { BackSide, Color, MeshBasicMaterial, MeshStandardMaterial, Object3D, type InstancedMesh, type Mesh } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { Activity, Clock, Video, Wrench } from 'lucide-react';
-import { CAMERAS, MODEL_BY_ID, type AreaId, type BufferView, type Tone } from '@allur/contracts/ref';
+import { CAMERAS, MODEL_BY_ID, type AreaId, type BodyDetail, type BufferView, type Tone } from '@allur/contracts/ref';
 import { openIncident } from '../../state/view';
 import { TONE_CLASS, TONE_ICON, cx } from '../../lib/tones';
 import { BODY, FLOOR_Y, type PlantLayout, type Rect } from './layout';
@@ -16,6 +16,15 @@ import { bodyTint } from './bodyLook';
 import type { Plaque, SceneData } from './useSceneData';
 import { EquipmentModel, FinishedContent, GhostFader, WarehouseContent, useMaterials, type HoverTarget } from './equipment';
 import { damp, requestAmbient } from './ticker';
+import { cameraCommands, isClick } from './controls';
+import { useHover } from './hover';
+import { CarPath } from './CarPath';
+import { ReplayGhost } from './ReplayGhost';
+import type { Replay } from './replay';
+import { useView } from '../../state/view';
+import { filtersActive, matchesFilters } from '../../state/search';
+import { useTranslation } from '../../i18n/store';
+import { translateArea, translateDynamicText, translateStatus } from '../../i18n/translator';
 
 const MAX_BODIES = 160;
 /** Слои подписей: плашки поверх подписей зон, всё — ниже плавающих панелей интерфейса */
@@ -35,14 +44,21 @@ export interface SceneProps {
   reducedMotion: boolean;
   /** Постоянный слой для подписей поверх холста: подписи не пересоздаются при старте сцены */
   portal: Portal;
-  /** Путь кузова по VIN (из паспорта автомобиля) */
-  vinPath: { vin: string; posts: string[] } | null;
+  /** Путь машины по цеху: маршрут из трекера */
+  pathDetail: BodyDetail | null;
+  /** Повтор истории машины: полупрозрачная копия проезжает её путь */
+  replay?: Replay | null;
+  stageName?: (id: string) => string;
+  /** Выбранная и наведённая машины — подсвечены поверх экземпляра */
+  selectedCar: string | null;
   onHover: (t: HoverTarget | null) => void;
   onPick: (area: AreaId, equipmentId: string | null) => void;
+  onPickCar: (bodyId: string) => void;
 }
 
 export function Scene(props: SceneProps) {
   const { layout, palette, data, stage, flow, focusArea, reducedMotion, portal, onHover, onPick } = props;
+  const { lang } = useTranslation();
   const mats = useMaterials(palette);
   const live = data.plcConnected && stage >= 1;
   const b = layout.bounds;
@@ -51,85 +67,94 @@ export function Scene(props: SceneProps) {
   return (
     <>
       <color attach="background" args={[palette.background]} />
-      <hemisphereLight args={['#ffffff', '#e3e7ec', 2.1]} />
-      <directionalLight position={[midX - 50, 80, 60]} intensity={1.5} />
+      {/* двойной клик по полу, участку, оборудованию или машине — плавно приблизиться к этой точке */}
+      <group
+        onDoubleClick={(e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation();
+          cameraCommands()?.flyTo(e.point.x, Math.min(e.point.y, 2), e.point.z);
+        }}
+      >
+        <hemisphereLight args={['#ffffff', '#e3e7ec', 2.1]} />
+        <directionalLight position={[midX - 50, 80, 60]} intensity={1.5} />
 
-      <mesh position={[midX, 0, 0]} rotation-x={-Math.PI / 2}>
-        <planeGeometry args={[1800, 1800]} />
-        <meshBasicMaterial color={palette.floor} />
-      </mesh>
-      <Grid
-        position={[midX, 0.004, 0]}
-        args={[width + 160, 160]}
-        cellSize={2}
-        cellThickness={0.6}
-        cellColor={palette.grid}
-        sectionSize={10}
-        sectionThickness={1}
-        sectionColor={palette.gridSection}
-        fadeDistance={300}
-        fadeStrength={1.6}
-      />
-      {/* разметка проходов вдоль линии */}
-      {[-1, 1].map((s) => (
-        <mesh key={s} position={[midX, 0.008, s * (layout.bounds.z1 + 1.3)]} rotation-x={-Math.PI / 2}>
-          <planeGeometry args={[width + 8, 0.34]} />
-          <meshBasicMaterial color={palette.aisle} />
+        <mesh position={[midX, 0, 0]} rotation-x={-Math.PI / 2}>
+          <planeGeometry args={[1800, 1800]} />
+          <meshBasicMaterial color={palette.floor} />
         </mesh>
-      ))}
-
-      {layout.stages.map(({ id: area }, i) => (
-        <Zone
-          key={area}
-          id={area}
-          rect={layout.zones[area]}
-          name={data.rows[area]?.name ?? area}
-          tone={data.rows[area]?.status.tone ?? 'neutral'}
-          statusLabel={data.rows[area]?.status.label ?? ''}
-          selected={focusArea === area}
-          dimmed={focusArea !== null && focusArea !== area}
-          labelY={i % 2 ? 10.2 : 7.6}
-          palette={palette}
-          reducedMotion={reducedMotion}
-          portal={portal}
-          onHover={onHover}
-          onPick={onPick}
+        <Grid
+          position={[midX, 0.004, 0]}
+          args={[width + 160, 160]}
+          cellSize={2}
+          cellThickness={0.6}
+          cellColor={palette.grid}
+          sectionSize={10}
+          sectionThickness={1}
+          sectionColor={palette.gridSection}
+          fadeDistance={300}
+          fadeStrength={1.6}
         />
-      ))}
+        {/* разметка проходов вдоль линии */}
+        {[-1, 1].map((s) => (
+          <mesh key={s} position={[midX, 0.008, s * (layout.bounds.z1 + 1.3)]} rotation-x={-Math.PI / 2}>
+            <planeGeometry args={[width + 8, 0.34]} />
+            <meshBasicMaterial color={palette.aisle} />
+          </mesh>
+        ))}
 
-      <LaneMarkings layout={layout} palette={palette} />
-      <LaneLabels layout={layout} focusArea={focusArea} portal={portal} />
+        {layout.stages.map(({ id: area }, i) => (
+          <Zone
+            key={area}
+            id={area}
+            rect={layout.zones[area]}
+            name={translateArea(area, lang, 'name') || data.rows[area]?.name || area}
+            tone={data.rows[area]?.status.tone ?? 'neutral'}
+            statusLabel={translateStatus(data.rows[area]?.status.label ?? '', lang)}
+            selected={focusArea === area}
+            dimmed={focusArea !== null && focusArea !== area}
+            labelY={i % 2 ? 10.2 : 7.6}
+            palette={palette}
+            reducedMotion={reducedMotion}
+            portal={portal}
+            onHover={onHover}
+            onPick={onPick}
+          />
+        ))}
 
-      {props.buffers.map((buf) => (
-        <BufferPad key={buf.id} rect={layout.buffers[buf.id]} buf={buf} palette={palette} portal={portal} onHover={onHover} />
-      ))}
+        <LaneMarkings layout={layout} palette={palette} />
+        <LaneLabels layout={layout} focusArea={focusArea} portal={portal} />
 
-      <GhostFader mats={mats} palette={palette} ghost={!live} />
-      {layout.equipment.map((place) => (
-        <EquipmentModel
-          key={place.id}
-          place={place}
-          view={data.equipment[place.id]}
-          mats={mats}
-          palette={palette}
-          layout={layout}
-          live={live}
-          reducedMotion={reducedMotion}
-          onHover={onHover}
-          onPick={onPick}
-        />
-      ))}
-      <WarehouseContent layout={layout} stock={data.stock} mats={mats} palette={palette} />
-      <FinishedContent layout={layout} mats={mats} />
+        {props.buffers.map((buf) => (
+          <BufferPad key={buf.id} rect={layout.buffers[buf.id]} buf={buf} palette={palette} portal={portal} onHover={onHover} />
+        ))}
 
-      <Bodies flow={flow} onHover={onHover} />
-      {props.vinPath && <VinPath layout={layout} posts={props.vinPath.posts} />}
+        <GhostFader mats={mats} palette={palette} ghost={!live} />
+        {layout.equipment.map((place) => (
+          <EquipmentModel
+            key={place.id}
+            place={place}
+            view={data.equipment[place.id]}
+            mats={mats}
+            palette={palette}
+            layout={layout}
+            live={live}
+            reducedMotion={reducedMotion}
+            onHover={onHover}
+            onPick={onPick}
+          />
+        ))}
+        <WarehouseContent layout={layout} stock={data.stock} mats={mats} palette={palette} />
+        <FinishedContent layout={layout} mats={mats} />
 
-      <Plaques layout={layout} data={data} portal={portal} />
-      {stage >= 1 && <CameraIcons layout={layout} portal={portal} />}
-      {stage >= 2 && <SensorBadges layout={layout} data={data} portal={portal} onHover={onHover} />}
+        <Bodies flow={flow} selected={props.selectedCar} onHover={onHover} onPick={props.onPickCar} />
+        {props.pathDetail && <CarPath detail={props.pathDetail} layout={layout} flow={flow} />}
+        {props.replay && props.stageName && <ReplayGhost replay={props.replay} stageName={props.stageName} portal={portal} />}
 
-      <Shadows x={midX} width={width} />
+        <Plaques layout={layout} data={data} portal={portal} />
+        {stage >= 1 && <CameraIcons layout={layout} portal={portal} />}
+        {stage >= 2 && <SensorBadges layout={layout} data={data} portal={portal} onHover={onHover} />}
+
+        <Shadows x={midX} width={width} />
+      </group>
     </>
   );
 }
@@ -146,7 +171,7 @@ const Shadows = memo(function Shadows({ x, width }: { x: number; width: number }
 // ---------------------------------------------------------------------------
 // Зона участка: платформа, низкие полупрозрачные стены, контур цвета статуса, подпись
 
-function Zone({
+const Zone = memo(function Zone({
   id,
   rect,
   name,
@@ -237,7 +262,7 @@ function Zone({
         }}
         onPointerOut={() => onHover(null)}
         onClick={(e: ThreeEvent<MouseEvent>) => {
-          if (e.delta > 6) return;
+          if (!isClick(e.nativeEvent)) return;
           e.stopPropagation();
           onPick(id, null);
         }}
@@ -274,14 +299,14 @@ function Zone({
       )}
     </group>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Разметка полос на полу: линии расходятся с общего входа и сходятся в общий выход участка
 
 const MARK = 0.3;
 
-function LaneMarkings({ layout, palette }: { layout: PlantLayout; palette: Palette }) {
+const LaneMarkings = memo(function LaneMarkings({ layout, palette }: { layout: PlantLayout; palette: Palette }) {
   const strips = useMemo(() => {
     const out: { key: string; x: number; z: number; w: number; d: number }[] = [];
     const hx = (key: string, x0: number, x1: number, z: number) => x1 > x0 && out.push({ key, x: (x0 + x1) / 2, z, w: x1 - x0, d: MARK });
@@ -309,12 +334,12 @@ function LaneMarkings({ layout, palette }: { layout: PlantLayout; palette: Palet
       ))}
     </group>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Подписи полос участка с параллельными станциями: «Onix», «Cobalt», «J7» у входа каждой линии
 
-function LaneLabels({ layout, focusArea, portal }: { layout: PlantLayout; focusArea: AreaId | null; portal: Portal }) {
+const LaneLabels = memo(function LaneLabels({ layout, focusArea, portal }: { layout: PlantLayout; focusArea: AreaId | null; portal: Portal }) {
   const items = useMemo(
     () =>
       Object.entries(layout.pipes).flatMap(([area, pipe]) =>
@@ -344,12 +369,13 @@ function LaneLabels({ layout, focusArea, portal }: { layout: PlantLayout; focusA
       )}
     </>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Буфер между участками: площадка и число кузовов — те же цифры, что в «Панели»
 
-function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: BufferView; palette: Palette; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
+const BufferPad = memo(
+  function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: BufferView; palette: Palette; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
   const w = rect.x1 - rect.x0;
   const d = rect.z1 - rect.z0;
   const midX = (rect.x0 + rect.x1) / 2;
@@ -367,6 +393,10 @@ function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: B
     [rect],
   );
   const edge = useMemo(() => '#' + palette.edge.getHexString(), [palette]);
+  const { lang } = useTranslation();
+  const fullLabel = lang === 'kk' ? ' · толы' : lang === 'en' ? ' · full' : ' · полон';
+  const emptyLabel = lang === 'kk' ? ' · бос' : lang === 'en' ? ' · empty' : ' · пуст';
+  const ofWord = lang === 'kk' ? '/' : lang === 'en' ? 'of' : 'из';
   return (
     <group>
       <mesh
@@ -396,57 +426,68 @@ function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: B
             full || empty ? cx(TONE_CLASS.waiting.bg, TONE_CLASS.waiting.ink) : 'bg-surface/95 text-ink-2',
           )}
         >
-          {buf.count} из {buf.capacity}
-          {full ? ' · полон' : empty ? ' · пуст' : ''}
+          {buf.count} {ofWord} {buf.capacity}
+          {full ? fullLabel : empty ? emptyLabel : ''}
         </span>
       </Html>
     </group>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Путь кузова по VIN: посты из паспорта по порядку — по линии и поперёк, как ездят кузова
-
-const VIN_COLOR = '#2b5fd9';
-
-function VinPath({ layout, posts }: { layout: PlantLayout; posts: string[] }) {
-  const points = useMemo(() => {
-    const pts: [number, number, number][] = [];
-    for (const id of posts) {
-      const s = layout.postSpots[id] ?? (layout.finishPosts.includes(id) && layout.finishedId ? layout.segSpots[layout.finishedId]?.[0] : undefined);
-      if (!s) continue;
-      const last = pts[pts.length - 1];
-      if (last && Math.abs(last[2] - s.z) > 0.5 && Math.abs(last[0] - s.x) > 0.5) pts.push([Math.abs(last[2]) < 0.5 ? s.x : last[0], 0.7, Math.abs(last[2]) < 0.5 ? last[2] : s.z]);
-      pts.push([s.x, 0.7, s.z]);
-    }
-    return pts;
-  }, [layout, posts]);
-  if (points.length < 2) return null;
-  const end = points[points.length - 1]!;
-  return (
-    <group>
-      <Line points={points} color={VIN_COLOR} lineWidth={5} />
-      <mesh position={[end[0], 3.4, end[2]]}>
-        <sphereGeometry args={[0.65, 20, 14]} />
-        <meshStandardMaterial color={VIN_COLOR} emissive={VIN_COLOR} emissiveIntensity={0.35} />
-      </mesh>
-    </group>
-  );
-}
+  },
+  // снимок приходит 4 раза в секунду с новым объектом буфера — перерисовываем, только если изменилось число
+  (a, b) => a.rect === b.rect && a.palette === b.palette && a.portal === b.portal && a.onHover === b.onHover && a.buf.count === b.buf.count && a.buf.capacity === b.buf.capacity && a.buf.id === b.buf.id,
+);
 
 // ---------------------------------------------------------------------------
 // Кузова: один InstancedMesh, у каждого экземпляра свой цвет — вид кузова по выполненным операциям
 // (голый металл, катафорез, грунт, цвет заказа); машинокомплект на складе — низкая паллета
 
-function Bodies({ flow, onHover }: { flow: BodyFlow; onHover: (t: HoverTarget | null) => void }) {
+const SELECT_COLOR = '#2b5fd9';
+/** Приглушённая машина при включённом фильтре — почти цвет пола */
+const DIM_COLOR = new Color('#e4e8ed');
+
+function Bodies({
+  flow,
+  selected,
+  onHover,
+  onPick,
+}: {
+  flow: BodyFlow;
+  selected: string | null;
+  onHover: (t: HoverTarget | null) => void;
+  onPick: (bodyId: string) => void;
+}) {
   const ref = useRef<InstancedMesh>(null);
+  const selRef = useRef<Mesh>(null);
+  const hovRef = useRef<Mesh>(null);
+  const pinRef = useRef<Mesh>(null);
+  const invalidate = useThree((s) => s.invalidate);
+  const hovered = useHover((h) => (h.target?.kind === 'body' ? h.target.id : null));
+  const filters = useView((v) => v.filters);
+  const matchRef = useRef<InstancedMesh>(null);
   const geometry = useMemo(() => new RoundedBoxGeometry(BODY.length, BODY.height, BODY.width, 2, 0.42), []);
   const material = useMemo(() => new MeshStandardMaterial({ color: '#ffffff', roughness: 0.55, metalness: 0.1 }), []);
+  // подсветка — увеличенный полупрозрачный дубль кузова изнутри наружу: читается как контур, без постобработки
+  const selMat = useMemo(() => new MeshBasicMaterial({ color: SELECT_COLOR, transparent: true, opacity: 0.85, side: BackSide, depthWrite: false }), []);
+  const hovMat = useMemo(() => new MeshBasicMaterial({ color: SELECT_COLOR, transparent: true, opacity: 0.45, side: BackSide, depthWrite: false }), []);
+  const matchMat = useMemo(() => new MeshBasicMaterial({ color: SELECT_COLOR, transparent: true, opacity: 0.5, side: BackSide, depthWrite: false }), []);
   const dummy = useMemo(() => new Object3D(), []);
+  const ring = useMemo(() => new Object3D(), []);
   const tint = useMemo(() => new Color(), []);
+  useEffect(() => invalidate(), [selected, hovered, filters, invalidate]);
   useFrame((state) => {
     const mesh = ref.current;
     if (!mesh) return;
+    let sel = false;
+    let hov = false;
+    const filtering = filtersActive(filters);
+    const match = matchRef.current;
+    let matched = 0;
+    const outline = (m: Mesh | null, k: number) => {
+      if (!m) return;
+      m.position.copy(dummy.position);
+      m.rotation.copy(dummy.rotation);
+      m.scale.copy(dummy.scale).multiplyScalar(k);
+    };
     const { count, moving } = flow.frame(performance.now(), (i, x, z, rot, s, view) => {
       if (i >= MAX_BODIES) return;
       const k = Math.max(0.001, s);
@@ -458,27 +499,73 @@ function Bodies({ flow, onHover }: { flow: BodyFlow; onHover: (t: HoverTarget | 
       else dummy.scale.setScalar(k);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
-      mesh.setColorAt(i, bodyTint(view, tint));
+      const color = bodyTint(view, tint);
+      if (filtering) {
+        if (matchesFilters(view, filters)) {
+          // подходящая под фильтр — обведена
+          if (match) {
+            ring.position.copy(dummy.position);
+            ring.rotation.copy(dummy.rotation);
+            ring.scale.copy(dummy.scale).multiplyScalar(1.12);
+            ring.updateMatrix();
+            match.setMatrixAt(matched++, ring.matrix);
+          }
+        } else color.lerp(DIM_COLOR, 0.6);
+      }
+      mesh.setColorAt(i, color);
+      if (view.bodyId === selected) {
+        sel = true;
+        outline(selRef.current, 1.18);
+        pinRef.current?.position.set(x, FLOOR_Y + h * k + 2.2, z);
+      } else if (view.bodyId === hovered) {
+        hov = true;
+        outline(hovRef.current, 1.12);
+      }
     });
+    if (selRef.current) selRef.current.visible = sel;
+    if (pinRef.current) pinRef.current.visible = sel;
+    if (hovRef.current) hovRef.current.visible = hov;
+    if (match) {
+      match.count = matched;
+      match.instanceMatrix.needsUpdate = true;
+    }
     mesh.count = Math.min(count, MAX_BODIES);
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (moving) state.invalidate();
   });
   return (
-    <instancedMesh
-      ref={ref}
-      args={[geometry, material, MAX_BODIES]}
-      frustumCulled={false}
-      onPointerMove={(e: ThreeEvent<PointerEvent>) => {
-        if (e.instanceId === undefined) return;
-        const id = flow.idAt(e.instanceId);
-        if (!id) return;
-        e.stopPropagation();
-        onHover({ kind: 'body', id });
-      }}
-      onPointerOut={() => onHover(null)}
-    />
+    <>
+      <instancedMesh
+        ref={ref}
+        args={[geometry, material, MAX_BODIES]}
+        frustumCulled={false}
+        userData={{ cars: true }}
+        onPointerMove={(e: ThreeEvent<PointerEvent>) => {
+          if (e.instanceId === undefined) return;
+          const id = flow.idAt(e.instanceId);
+          if (!id) return;
+          e.stopPropagation();
+          onHover({ kind: 'body', id });
+        }}
+        onPointerOut={() => onHover(null)}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
+          if (e.instanceId === undefined || !isClick(e.nativeEvent)) return;
+          const id = flow.idAt(e.instanceId);
+          if (!id) return;
+          e.stopPropagation();
+          onPick(id);
+        }}
+      />
+      <instancedMesh ref={matchRef} args={[geometry, matchMat, MAX_BODIES]} count={0} frustumCulled={false} raycast={() => null} />
+      <mesh ref={selRef} geometry={geometry} material={selMat} visible={false} raycast={() => null} />
+      <mesh ref={hovRef} geometry={geometry} material={hovMat} visible={false} raycast={() => null} />
+      {/* метка над выбранной машиной — видна и на общем плане цеха */}
+      <mesh ref={pinRef} visible={false} rotation-x={Math.PI} raycast={() => null}>
+        <coneGeometry args={[0.7, 1.6, 20]} />
+        <meshStandardMaterial color={SELECT_COLOR} emissive={SELECT_COLOR} emissiveIntensity={0.35} />
+      </mesh>
+    </>
   );
 }
 
@@ -505,6 +592,7 @@ function shortTitle(p: Plaque, layout: PlantLayout): string {
 }
 
 function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneData; portal: Portal }) {
+  const { lang } = useTranslation();
   // соседние плашки не должны наезжать друг на друга: поднимаем следующую, если близко по потоку
   const items = useMemo(() => {
     const all = [
@@ -524,19 +612,23 @@ function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneDat
       {items.map((it) => {
         if (it.kind === 'problem') {
           const Icon = TONE_ICON[it.p.tone];
+          const openIncidentText = lang === 'kk' ? 'Инцидентті ашу' : lang === 'en' ? 'Open incident' : 'Открыть инцидент';
+          const title = `${translateDynamicText(it.p.title, lang)} — ${translateDynamicText(it.p.impact, lang)}. ${openIncidentText}`;
+          const rawShort = shortTitle(it.p, layout);
+          const localizedShort = translateDynamicText(rawShort, lang);
           return (
             <Html key={it.key} portal={portal as never} position={it.at} center zIndexRange={Z_PLAQUE}>
               <button
                 type="button"
                 onClick={() => openIncident(it.p.incidentId)}
-                title={`${it.p.title} — ${it.p.impact}. Открыть инцидент`}
+                title={title}
                 className={cx(
                   'view-in pointer-events-auto inline-flex max-w-[15rem] items-center gap-1.5 whitespace-nowrap rounded-xl border-l-4 bg-surface py-1.5 pl-2 pr-3 text-[0.9375rem] font-semibold text-ink shadow-pop hover:bg-surface-2',
                   TONE_CLASS[it.p.tone].border,
                 )}
               >
                 <Icon className={cx('size-4 shrink-0', TONE_CLASS[it.p.tone].ink)} strokeWidth={2.25} aria-hidden />
-                <span className="truncate">{shortTitle(it.p, layout)}</span>
+                <span className="truncate">{localizedShort}</span>
               </button>
             </Html>
           );
@@ -552,7 +644,7 @@ function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneDat
               )}
             >
               {it.d.tone === 'maintenance' ? <Wrench className="size-4 shrink-0" strokeWidth={2.25} aria-hidden /> : <Clock className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}
-              {it.d.text}
+              {translateDynamicText(it.d.text, lang)}
             </button>
           </Html>
         );
@@ -584,6 +676,8 @@ function CameraIcons({ layout, portal }: { layout: PlantLayout; portal: Portal }
 }
 
 function SensorBadges({ layout, data, portal, onHover }: { layout: PlantLayout; data: SceneData; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
+  const { lang } = useTranslation();
+  const sensorText = lang === 'kk' ? 'датчик' : lang === 'en' ? 'sensor' : 'датчик';
   return (
     <>
       {data.sensors.map((s) => {
@@ -598,7 +692,7 @@ function SensorBadges({ layout, data, portal, onHover }: { layout: PlantLayout; 
               className="view-in pointer-events-auto inline-flex cursor-default items-center gap-1 rounded-full bg-ink px-1.5 py-0.5 text-xs font-semibold text-white shadow-card"
             >
               <Activity className="size-3.5" strokeWidth={2.5} aria-hidden />
-              датчик
+              {sensorText}
             </span>
           </Html>
         );

@@ -1,17 +1,23 @@
-// «Почему?»: правило или модель, входные данные с источниками, вывод, допущения.
 import type { Explain } from '@allur/contracts/ref';
 import { SourceBadge } from './SourceBadge';
+import { useTranslation } from '../i18n/store';
 
 export function ExplainView({ explain }: { explain: Explain }) {
+  const { lang } = useTranslation();
+  const titleHow = lang === 'kk' ? 'Егіз қалай есептейді' : lang === 'en' ? 'How the twin computes' : 'Как считает двойник';
+  const titleInputs = lang === 'kk' ? 'Қандай деректер бойынша' : lang === 'en' ? 'Source data inputs' : 'На каких данных';
+  const titleConclusion = lang === 'kk' ? 'Қорытынды' : lang === 'en' ? 'Conclusion' : 'Вывод';
+  const titleAssumptions = lang === 'kk' ? 'Болжамдар' : lang === 'en' ? 'Assumptions' : 'Допущения';
+
   return (
     <div className="flex flex-col gap-4 text-base">
       <section>
-        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">Как считает двойник</h3>
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">{titleHow}</h3>
         <p className="leading-snug">{explain.rule}</p>
       </section>
       {explain.inputs.length > 0 && (
         <section>
-          <h3 className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-ink-3">На каких данных</h3>
+          <h3 className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-ink-3">{titleInputs}</h3>
           <ul className="flex flex-col divide-y divide-line rounded-xl bg-surface">
             {explain.inputs.map((i, k) => (
               <li key={k} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3 py-2">
@@ -26,12 +32,12 @@ export function ExplainView({ explain }: { explain: Explain }) {
         </section>
       )}
       <section className="rounded-xl bg-accent-bg px-3 py-2.5">
-        <h3 className="mb-0.5 text-sm font-semibold uppercase tracking-wide text-accent-ink">Вывод</h3>
+        <h3 className="mb-0.5 text-sm font-semibold uppercase tracking-wide text-accent-ink">{titleConclusion}</h3>
         <p className="font-medium leading-snug">{explain.conclusion}</p>
       </section>
       {explain.assumptions && explain.assumptions.length > 0 && (
         <section>
-          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">Допущения</h3>
+          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">{titleAssumptions}</h3>
           <ul className="list-disc space-y-0.5 pl-5 text-ink-2">
             {explain.assumptions.map((a, k) => (
               <li key={k}>{a}</li>

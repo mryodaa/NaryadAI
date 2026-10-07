@@ -1,20 +1,23 @@
 // Переключатель вида «Цех сейчас»: объёмная модель или строгая панель. Клавиша V.
 import { Box, Rows3, type LucideIcon } from 'lucide-react';
-import { setViewMode, useView, NO_3D_MESSAGE, type ViewMode } from '../state/view';
+import { setViewMode, useView, type ViewMode } from '../state/view';
 import { webglSupport } from '../lib/webgl';
 import { loadPlant3D } from '../views/plant3d/load';
 import { cx } from '../lib/tones';
-
-const OPTIONS: { id: ViewMode; label: string; icon: LucideIcon }[] = [
-  { id: '3d', label: '3D цех', icon: Box },
-  { id: 'panel', label: 'Панель', icon: Rows3 },
-];
+import { useTranslation } from '../i18n/store';
 
 export function ViewSwitch() {
+  const { t } = useTranslation();
   const mode = useView((v) => v.mode);
   const no3d = webglSupport() === 'none';
+
+  const OPTIONS: { id: ViewMode; label: string; icon: LucideIcon }[] = [
+    { id: '3d', label: t.views.view3d, icon: Box },
+    { id: 'panel', label: t.views.viewPanel, icon: Rows3 },
+  ];
+
   return (
-    <div role="radiogroup" aria-label="Вид экрана" className="inline-flex shrink-0 rounded-xl bg-line p-0.5 print:hidden">
+    <div role="radiogroup" aria-label={t.views.viewMode} className="inline-flex shrink-0 rounded-xl bg-line p-0.5 print:hidden">
       {OPTIONS.map(({ id, label, icon: Icon }) => {
         const on = mode === id;
         const disabled = id === '3d' && no3d;
@@ -26,7 +29,7 @@ export function ViewSwitch() {
             role="radio"
             aria-checked={on}
             disabled={disabled}
-            title={disabled ? NO_3D_MESSAGE : `${label} · клавиша V`}
+            title={disabled ? t.views.view3dUnavailable : `${label} · ${t.views.switchPrompt}`}
             onClick={() => setViewMode(id)}
             onPointerEnter={prefetch}
             onFocus={prefetch}
@@ -44,3 +47,4 @@ export function ViewSwitch() {
     </div>
   );
 }
+

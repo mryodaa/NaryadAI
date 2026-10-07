@@ -1,6 +1,6 @@
 // Оборудование из примитивов. Один стиль — матовые светлые поверхности; цвет только у статусов.
 // На ступени 0 (только 1С) оборудование «призрачное»: его состояние видно лишь по проходу VIN.
-import { useMemo, useRef } from 'react';
+import { memo, useMemo, useRef } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { Instance, Instances } from '@react-three/drei';
 import { Color, DoubleSide, MeshBasicMaterial, MeshStandardMaterial, type Group } from 'three';
@@ -9,6 +9,7 @@ import { FLOOR_Y, type EquipmentPlace, type PlantLayout } from './layout';
 import type { Palette } from './palette';
 import type { EquipmentView } from './useSceneData';
 import { damp, requestAmbient } from './ticker';
+import { hitsCar, isClick } from './controls';
 
 export interface Mats {
   solid: MeshStandardMaterial;
@@ -64,7 +65,23 @@ interface ModelProps {
   onPick: (area: AreaId, equipmentId: string) => void;
 }
 
-export function EquipmentModel(props: ModelProps) {
+/** Снимок приходит 4 раза в секунду с новыми объектами — сравниваем то, что влияет на модель */
+function sameModel(a: ModelProps, b: ModelProps): boolean {
+  return (
+    a.place === b.place &&
+    a.mats === b.mats &&
+    a.palette === b.palette &&
+    a.layout === b.layout &&
+    a.live === b.live &&
+    a.reducedMotion === b.reducedMotion &&
+    a.onHover === b.onHover &&
+    a.onPick === b.onPick &&
+    a.view?.status === b.view?.status &&
+    a.view?.dp === b.view?.dp
+  );
+}
+
+export const EquipmentModel = memo(function EquipmentModel(props: ModelProps) {
   const { place, view, mats, palette, layout, live, reducedMotion, onHover, onPick } = props;
   const status = live ? (view?.status ?? null) : null;
   let model: React.ReactNode;
@@ -121,12 +138,14 @@ export function EquipmentModel(props: ModelProps) {
   return (
     <group
       onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+        if (hitsCar(e)) return;
         e.stopPropagation();
         onHover({ kind: 'equipment', id: place.id });
       }}
       onPointerOut={() => onHover(null)}
       onClick={(e: ThreeEvent<MouseEvent>) => {
-        if (e.delta > 6) return;
+        // за деталью оборудования — машина: клик достаётся ей
+        if (!isClick(e.nativeEvent) || hitsCar(e)) return;
         e.stopPropagation();
         onPick(place.area, place.id);
       }}
@@ -135,7 +154,7 @@ export function EquipmentModel(props: ModelProps) {
       {tone && <StatusPin place={place} color={palette.tone[tone]} pulse={tone === 'fault' && !reducedMotion} />}
     </group>
   );
-}
+}, sameModel);
 
 /** Метка проблемного оборудования: красная — авария, фиолетовая — обслуживание */
 function StatusPin({ place, color, pulse }: { place: EquipmentPlace; color: Color; pulse: boolean }) {

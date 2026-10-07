@@ -90,6 +90,8 @@ export function placeBodies(views: BodyView[], layout: PlantLayout): Map<string,
 
 export class BodyFlow {
   private bodies = new Map<string, Body>();
+  /** Номер экземпляра в InstancedMesh → номер кузова: заполняется в каждом кадре вместе с матрицами */
+  private ids: string[] = [];
 
   constructor(private layout: PlantLayout) {}
 
@@ -133,6 +135,7 @@ export class BodyFlow {
   frame(now: number, write: (i: number, x: number, z: number, rot: number, scale: number, view: BodyView) => void): { count: number; moving: boolean } {
     let i = 0;
     let moving = false;
+    this.ids.length = 0;
     for (const b of [...this.bodies.values()]) {
       if (b.tween) {
         const t = b.tween.dur <= 0 ? 1 : Math.min(1, (now - b.tween.t0) / 1000 / b.tween.dur);
@@ -155,19 +158,21 @@ export class BodyFlow {
           }
         } else moving = true;
       }
+      this.ids[i] = b.id;
       write(i++, b.x, b.z, b.rot, b.scale, b.view);
     }
     return { count: i, moving };
   }
 
-  /** Кузов по номеру экземпляра в последнем кадре (для наведения) */
+  /** Где кузов сейчас на сцене (для камеры: подлёт и слежение) */
+  pose(id: string): { x: number; z: number } | null {
+    const b = this.bodies.get(id);
+    return b && !b.dying ? { x: b.x, z: b.z } : null;
+  }
+
+  /** Кузов по номеру экземпляра в последнем кадре (наведение и выбор) */
   idAt(index: number): string | null {
-    let i = 0;
-    for (const b of this.bodies.values()) {
-      if (i === index) return b.id;
-      i++;
-    }
-    return null;
+    return this.ids[index] ?? null;
   }
 }
 

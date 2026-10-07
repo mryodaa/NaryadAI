@@ -1,7 +1,8 @@
 // Вид экрана «Цех сейчас»: объёмная модель или строгая панель. Режим — только способ показа:
 // выбранный участок, оборудование и открытый инцидент общие для обоих режимов и переживают переключение.
 import { create } from 'zustand';
-import type { AreaId } from '@allur/contracts/ref';
+import type { AreaId, ModelId } from '@allur/contracts/ref';
+import { NO_FILTERS, type CarFilters } from './search';
 import { ENABLE_3D } from '../lib/features';
 import { webglSupport } from '../lib/webgl';
 
@@ -45,8 +46,23 @@ interface ViewState {
   notice: string | null;
   /** Автопоказ для демонстрации: камера сама облетает цех (только 3D) */
   tour: boolean;
-  /** Путь кузова по VIN, показанный в 3D из паспорта автомобиля */
-  vinPath: { vin: string; posts: string[] } | null;
+  /** Путь машины по цеху в 3D (номер кузова): из карточки или паспорта */
+  carPath: string | null;
+  /** Выбранная машина (номер кузова): подсвечена в 3D, открыта её карточка — в обоих режимах */
+  car: string | null;
+  /** Открытый паспорт автомобиля (VIN) — поверх любого экрана */
+  passport: string | null;
+  /** Камера, лети к машине (из поиска, клавиша F): номер запроса меняется при каждом новом */
+  flyCar: { bodyId: string; n: number } | null;
+  /** Быстрые фильтры 3D: подходящие машины подсвечены, остальные приглушены */
+  filters: CarFilters;
+  /**
+   * Слежение за машиной: в 3D камера ведёт её по цеху, в «Панели» подсвечен участок, где она сейчас.
+   * paused — пользователь сам переместил камеру: плашка предлагает вернуться к машине.
+   */
+  follow: { bodyId: string; paused: boolean } | null;
+  /** Слежение закончилось: машина принята на склад готовой продукции */
+  followEnded: { bodyId: string; vin: string | null } | null;
 }
 
 /** Ссылка (?view=) важнее запомненного выбора; без выбора — 3D, если компьютер его потянет */
@@ -66,7 +82,13 @@ export const useView = create<ViewState>(() => ({
   areaPanel: false,
   incident: null,
   tour: false,
-  vinPath: null,
+  carPath: null,
+  car: null,
+  passport: null,
+  flyCar: null,
+  filters: NO_FILTERS,
+  follow: null,
+  followEnded: null,
 }));
 
 export function setViewMode(mode: ViewMode) {
@@ -99,7 +121,81 @@ export function selectArea(area: AreaId | null) {
 
 /** Открыть панель участка; участок (и оборудование, если кликнули по нему) становится выбранным */
 export function openAreaPanel(area: AreaId, equipment: string | null = null) {
-  useView.setState({ area, equipment, areaPanel: true });
+  useView.setState({ area, equipment, areaPanel: true, car: null });
+}
+
+/** Выбрать машину: карточка на месте панели участка; камера сама не перелетает */
+export function selectCar(bodyId: string) {
+  useView.setState({ car: bodyId, areaPanel: false });
+}
+
+/** Снять выбор машины (Esc, крестик карточки) */
+export function closeCar() {
+  useView.setState({ car: null });
+}
+
+/** Найти машину: выбрать, открыть карточку; в 3D — камера подлетает, в «Панели» — раскрыт её участок */
+export function focusCar(bodyId: string, stageId?: string) {
+  const v = useView.getState();
+  useView.setState({
+    car: bodyId,
+    areaPanel: false,
+    flyCar: { bodyId, n: (v.flyCar?.n ?? 0) + 1 },
+    ...(v.mode === 'panel' && stageId ? { area: stageId as AreaId, equipment: null } : {}),
+  });
+}
+
+/** Следить за машиной: она выбрана, камера подлетает и дальше ведёт её (автопоказ выключается) */
+export function startFollow(bodyId: string) {
+  useView.setState({ car: bodyId, areaPanel: false, follow: { bodyId, paused: false }, followEnded: null, tour: false });
+}
+
+export function stopFollow() {
+  useView.setState({ follow: null });
+}
+
+/** Пользователь сам переместил камеру — слежение на паузе, можно вернуться к машине */
+export function pauseFollow() {
+  const f = useView.getState().follow;
+  if (f && !f.paused) useView.setState({ follow: { ...f, paused: true } });
+}
+
+export function resumeFollow() {
+  const f = useView.getState().follow;
+  if (f) useView.setState({ follow: { ...f, paused: false } });
+}
+
+/** Машина доехала до склада готовой продукции: слежение закончено, плашка с паспортом */
+export function endFollow(vin: string | null) {
+  const f = useView.getState().follow;
+  if (f) useView.setState({ follow: null, followEnded: { bodyId: f.bodyId, vin } });
+}
+
+export function dismissFollowEnded() {
+  useView.setState({ followEnded: null });
+}
+
+export function toggleFlagFilter(flag: 'delayed' | 'rework') {
+  useView.setState((v) => ({ filters: { ...v.filters, [flag]: !v.filters[flag] } }));
+}
+
+export function toggleModelFilter(model: ModelId) {
+  useView.setState((v) => {
+    const has = v.filters.models.includes(model);
+    return { filters: { ...v.filters, models: has ? v.filters.models.filter((m) => m !== model) : [...v.filters.models, model] } };
+  });
+}
+
+export function resetFilters() {
+  useView.setState({ filters: NO_FILTERS });
+}
+
+export function openPassport(vin: string) {
+  useView.setState({ passport: vin });
+}
+
+export function closePassport() {
+  useView.setState({ passport: null });
 }
 
 /** Закрыть панель; участок остаётся выбранным */
@@ -120,15 +216,21 @@ export function closeIncident() {
   useView.setState({ incident: null });
 }
 
-/** Путь кузова по VIN в 3D (кнопка в паспорте автомобиля) */
-export function showVinPath(vin: string, posts: string[]) {
+/** «Показать путь в цеху»: линия маршрута машины в 3D; машина выбрана (карточка открыта) */
+export function showCarPath(bodyId: string) {
   setViewMode('3d');
   if (useView.getState().mode !== '3d') return;
-  useView.setState({ vinPath: { vin, posts }, area: null, equipment: null, areaPanel: false });
+  useView.setState({ carPath: bodyId, car: bodyId, areaPanel: false });
 }
 
-export function clearVinPath() {
-  useView.setState({ vinPath: null });
+/** Повторный клик скрывает путь */
+export function toggleCarPath(bodyId: string) {
+  if (useView.getState().carPath === bodyId) clearCarPath();
+  else showCarPath(bodyId);
+}
+
+export function clearCarPath() {
+  useView.setState({ carPath: null });
 }
 
 export function setTour(on: boolean) {

@@ -1,4 +1,3 @@
-// Центр «Цех сейчас» в режиме «Панель»: строгий список участков. 3D — отдельным слоем во весь экран (Scene3DLayer).
 import { useEffect, useState } from 'react';
 import { Info, TriangleAlert, X } from 'lucide-react';
 import type { LiveSnapshot } from '@allur/contracts/ref';
@@ -6,6 +5,8 @@ import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { Button } from '../../components/ui';
 import { dismissNotice, useView } from '../../state/view';
 import { PanelView } from '../../views/panel/PanelView';
+import { useTranslation } from '../../i18n/store';
+import { translateDynamicText } from '../../i18n/translator';
 
 export function ShopCenter({ snapshot: s, onIncident }: { snapshot: LiveSnapshot; onIncident: (id: string) => void }) {
   const notice = useView((v) => v.notice);
@@ -22,25 +23,28 @@ export function ShopCenter({ snapshot: s, onIncident }: { snapshot: LiveSnapshot
 }
 
 function CenterError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div role="alert" className="flex items-center gap-3 rounded-2xl bg-surface px-4 py-5 shadow-card">
       <TriangleAlert className="size-6 shrink-0 text-st-attention" strokeWidth={2.25} aria-hidden />
-      <span className="flex-1 text-lg leading-snug">Не получилось показать список участков. Показатели и «Требует внимания» работают.</span>
-      <Button onClick={onRetry}>Показать снова</Button>
+      <span className="flex-1 text-lg leading-snug">{t.shop.panelError}</span>
+      <Button onClick={onRetry}>{t.shop.retry}</Button>
     </div>
   );
 }
 
 function Notice({ text }: { text: string }) {
+  const { t, lang } = useTranslation();
   useEffect(() => {
-    const t = setTimeout(dismissNotice, 10_000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(dismissNotice, 10_000);
+    return () => clearTimeout(timer);
   }, [text]);
+  const showingPanelSuffix = lang === 'kk' ? ' — «Панель» көрсетілуде' : lang === 'en' ? ' — showing "Panel"' : ' — показываем «Панель»';
   return (
     <div role="status" className="flex items-center gap-2 rounded-xl bg-st-waiting-bg px-3 py-2 text-base font-medium text-st-waiting-ink print:hidden">
       <Info className="size-5 shrink-0" strokeWidth={2.25} aria-hidden />
-      <span className="flex-1">{text} — показываем «Панель»</span>
-      <button type="button" onClick={dismissNotice} aria-label="Скрыть сообщение" className="grid size-7 shrink-0 place-items-center rounded-lg hover:bg-surface">
+      <span className="flex-1">{translateDynamicText(text, lang)}{showingPanelSuffix}</span>
+      <button type="button" onClick={dismissNotice} aria-label={t.common.close} className="grid size-7 shrink-0 place-items-center rounded-lg hover:bg-surface">
         <X className="size-4" />
       </button>
     </div>

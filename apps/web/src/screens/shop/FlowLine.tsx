@@ -1,26 +1,28 @@
-// Поток производства слева направо: участки из конфигурации завода, между ними буферы силуэтами кузовов.
 import { ArrowRight } from 'lucide-react';
 import { inflect, type AreaId, type AreaView, type BufferView, type PlantStage } from '@allur/contracts/ref';
 import { StatusChip } from '../../components/ui';
 import { usePlantModel } from '../../state/plant';
 import { AREA_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num1 } from '../../lib/format';
+import { useTranslation } from '../../i18n/store';
+import { translateArea, translateDynamicText, translateStatus } from '../../i18n/translator';
+import type { Translations, Lang } from '../../i18n/types';
 
 const MAX_SHELLS = 10;
 
 /** «ABB-01…04», «Камеры-01, 02», «Конвейер-03» — подзаголовок связывает названия из 1С с участком */
-function subtitle(stage: PlantStage): string {
+function subtitle(stage: PlantStage, t: Translations, _lang: Lang): string {
   switch (stage.kind) {
     case 'warehouse_in':
-      return 'комплек­тующих';
+      return t.shop.flowSubtitleWarehouseIn;
     case 'warehouse_out':
-      return 'готовой продук­ции';
+      return t.shop.flowSubtitleWarehouseOut;
     case 'inspection':
-      return 'контроль качества';
+      return t.shop.flowSubtitleInspection;
     default: {
       const eq = stage.equipment.filter((e) => !e.passive);
       const robots = eq.filter((e) => e.type.id === 'spot_robot');
-      if (robots.length > 1) return `роботы ${compactIds(robots.map((e) => e.id))}`;
+      if (robots.length > 1) return t.shop.robotsLabel(compactIds(robots.map((e) => e.id)));
       const booths = eq.filter((e) => e.type.id === 'paint_booth');
       if (booths.length) return compactNames(booths.map((e) => e.name));
       const conveyors = eq.filter((e) => e.type.id === 'conveyor');
@@ -110,12 +112,14 @@ function CardShell({
 }
 
 function Title({ stage, title }: { stage: PlantStage; title?: string }) {
+  const { t, lang } = useTranslation();
   // склады и ОТК без подзаголовка непонятны — его показываем всегда; остальным — только на широком экране
   const always = !stage.producing || stage.kind === 'inspection';
+  const stageName = translateArea(stage.id, lang, 'short') || stage.short;
   return (
     <div className="min-w-0 leading-tight">
-      <div className="text-[1.125rem] font-semibold">{title ?? stage.short}</div>
-      <div className={cx('text-sm text-ink-3', !always && 'hidden 2xl:block')}>{subtitle(stage)}</div>
+      <div className="text-[1.125rem] font-semibold">{title ?? stageName}</div>
+      <div className={cx('text-sm text-ink-3', !always && 'hidden 2xl:block')}>{subtitle(stage, t, lang)}</div>
     </div>
   );
 }
@@ -133,28 +137,30 @@ function Count({ label, value, of }: { label: string; value: string | number; of
 }
 
 function AreaCard({ area, stage, onClick }: { area: AreaView; stage: PlantStage; onClick?: (id: AreaId) => void }) {
+  const { t, lang } = useTranslation();
   const meta = AREA_STATUS[area.status];
   return (
     <CardShell id={area.id} tone={meta.tone} onClick={onClick}>
       <Title stage={stage} />
-      <StatusChip tone={meta.tone} label={meta.label} icon={meta.icon} />
-      <Count label="за смену" value={area.done} of={`из ${area.planToNow}`} />
-      {area.reason && <div className={cx('text-base font-medium leading-snug', TONE_CLASS[meta.tone].ink)}>{area.reason}</div>}
+      <StatusChip tone={meta.tone} label={translateStatus(area.status, lang)} icon={meta.icon} />
+      <Count label={t.shop.perShift} value={area.done} of={t.shop.ofPlan(area.planToNow)} />
+      {area.reason && <div className={cx('text-base font-medium leading-snug', TONE_CLASS[meta.tone].ink)}>{translateDynamicText(area.reason, lang)}</div>}
     </CardShell>
   );
 }
 
 function WarehouseCard({ area, stage, onClick }: { area: AreaView; stage: PlantStage; onClick?: (id: AreaId) => void }) {
+  const { t } = useTranslation();
   const low = !!area.worstKit && area.worstKit.shiftsLeft < 2;
   const tone = low ? 'attention' : 'neutral';
   return (
     <CardShell id={area.id} tone={tone} onClick={onClick}>
-      <Title stage={stage} title="Склад" />
-      <StatusChip tone={tone} label={low ? 'Есть дефицит' : 'Запас в норме'} />
-      <Count label="запас, смен" value={num1(area.stockShifts ?? 0)} />
+      <Title stage={stage} title={t.shop.warehouseTitle} />
+      <StatusChip tone={tone} label={low ? t.shop.shortageDetected : t.shop.stockNormal} />
+      <Count label={t.shop.stockShiftsLabel} value={num1(area.stockShifts ?? 0)} />
       {area.worstKit && (
         <div className={cx('text-base font-medium leading-snug', low ? 'text-st-attention-ink' : 'text-ink-2')}>
-          {area.worstKit.name} на {num1(area.worstKit.shiftsLeft)} смены
+          {t.shop.shiftsForKit(area.worstKit.name, num1(area.worstKit.shiftsLeft))}
         </div>
       )}
     </CardShell>
@@ -162,11 +168,12 @@ function WarehouseCard({ area, stage, onClick }: { area: AreaView; stage: PlantS
 }
 
 function FinishedCard({ area, stage, onClick }: { area: AreaView; stage: PlantStage; onClick?: (id: AreaId) => void }) {
+  const { t } = useTranslation();
   return (
     <CardShell id={area.id} tone="neutral" onClick={onClick}>
-      <Title stage={stage} title="Склад" />
-      <StatusChip tone="neutral" label="Принимает" />
-      <Count label="принято за смену" value={area.done} />
+      <Title stage={stage} title={t.shop.warehouseTitle} />
+      <StatusChip tone="neutral" label={t.shop.warehouseAccepting} />
+      <Count label={t.shop.acceptedPerShift} value={area.done} />
     </CardShell>
   );
 }
@@ -181,12 +188,13 @@ function Arrow() {
 
 /** Буфер: до 10 силуэтов кузовов, дальше «+N». Подпись — «11 из 12». */
 function Buffer({ b }: { b: BufferView }) {
+  const { t } = useTranslation();
   const shown = Math.min(b.count, MAX_SHELLS);
   const extra = b.count - shown;
   const full = b.count >= b.capacity;
   const empty = b.count === 0;
   return (
-    <div className="relative flex flex-col items-center justify-center gap-1" title={`Буфер: ${b.count} из ${b.capacity} кузовов`}>
+    <div className="relative flex flex-col items-center justify-center gap-1" title={t.shop.bufferTooltip(b.count, b.capacity)}>
       <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-line-strong" aria-hidden />
       <ArrowRight className="absolute right-[-0.35rem] top-1/2 size-4 -translate-y-1/2 text-ink-3" strokeWidth={2.5} aria-hidden />
       <div className="relative grid grid-cols-2 gap-x-1 gap-y-[3px] rounded-lg bg-page px-1 py-1.5">
@@ -197,7 +205,7 @@ function Buffer({ b }: { b: BufferView }) {
       </div>
       <div className="relative rounded-md bg-page px-1 text-center leading-none">
         <div className={cx('num text-base font-semibold', full || empty ? 'text-st-waiting-ink' : 'text-ink-2')}>{b.count}</div>
-        <div className="num text-xs text-ink-3">из {b.capacity}</div>
+        <div className="num text-xs text-ink-3">{t.shop.ofCapacity(b.capacity)}</div>
       </div>
     </div>
   );

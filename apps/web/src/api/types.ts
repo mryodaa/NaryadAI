@@ -1,5 +1,5 @@
 // Типы ответов REST, которые отдаёт ядро двойника (повторяют twin-core, без зависимости от него).
-import type { AreaId, AreaStatus, Explain, ExplainInput, SourceId, Tone } from '@allur/contracts/ref';
+import type { AreaId, AreaStatus, Explain, ExplainInput, SourceId, Tone, BodyDetail } from '@allur/contracts/ref';
 
 export interface SignalView {
   source: SourceId | 'twin';
@@ -170,6 +170,8 @@ export interface Passport {
   steps: { post: string; postName: string; area: AreaId; at: string; conditions: { label: string; value: string; tone: Tone; source: SourceId }[] }[];
   checks: { at: string; checkpoint: string; defect: string; decision: string; source: SourceId }[];
   plcConnected: boolean;
+  /** Кузов по трекеру: проходы стадий, маршрут операций, история отметок */
+  body: BodyDetail | null;
 }
 
 export interface EquipmentOverview {

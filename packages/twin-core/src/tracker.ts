@@ -79,6 +79,8 @@ export interface TrackedBody {
   route: TrackStep[];
   stations: Record<string, string>;
   stageTimes: Record<string, { in?: number; out?: number }>;
+  /** Проходы участков по порядку (с петлями перекраски) — для ленты стадий в паспорте */
+  passes: { stageId: string; loop: number; in?: number; out?: number }[];
   history: TrackHistory[];
   lastMarks: Map<string, number>;
   nonconformity: boolean;
@@ -157,6 +159,8 @@ export class BodyTracker {
     if (b.stageIdx < 0 && this.plant.warehouseIn) {
       b.stageIdx = this.plant.warehouseIn.index;
       this.place(b, { kind: 'warehouse', stageId: this.plant.warehouseIn.id, precision: 'stage', estimated: false }, o.ts);
+      // на складе — с момента заказа: машинокомплект ждёт выдачи
+      this.pass(b, this.plant.warehouseIn.id, 'in', o.ts);
     }
   }
 
@@ -267,6 +271,7 @@ export class BodyTracker {
       color: color ? { code: color.code, name: color.name, hex: color.hex, finish: color.finish } : null,
       loc: est ? { ...b.loc, equipmentId: est.equipmentId ?? undefined, postId: est.postId ?? undefined, estimated: true } : b.loc,
       since: toPlantIso(b.since),
+      stageSince: (b.loc.kind === 'stage' || b.loc.kind === 'station') && b.stageTimes[b.loc.stageId]?.in !== undefined ? toPlantIso(b.stageTimes[b.loc.stageId]!.in!) : null,
       normSec: norm,
       visual: this.visual(b, est?.doneIdx ?? -1),
       flags,
@@ -279,6 +284,7 @@ export class BodyTracker {
       ...this.view(b, now),
       plannedSeq: b.plannedSeq,
       trim: b.trim,
+      stages: b.passes.map((p) => ({ stageId: p.stageId, loop: p.loop, in: p.in === undefined ? null : toPlantIso(p.in), out: p.out === undefined ? null : toPlantIso(p.out) })),
       route: b.route.map((s) => ({
         operation: s.operation,
         name: OPERATIONS[s.operation]?.name ?? s.operation,
@@ -295,6 +301,23 @@ export class BodyTracker {
       })),
       history: b.history.map((h) => ({ at: toPlantIso(h.ts), kind: h.kind, text: h.text, stageId: h.stageId, checkpointId: h.checkpointId, equipmentId: h.equipmentId, method: h.method, source: h.source, restored: h.restored })),
     };
+  }
+
+  /**
+   * Поиск по всем кузовам, которые знает трекер, — и тем, что давно на складе готовой продукции:
+   * часть VIN (последние 4–6 знаков) или номера кузова. Совпадение в конце VIN — выше, затем свежие.
+   */
+  search(query: string, now: number, limit = 20): BodyView[] {
+    const q = query.toUpperCase().replace(/[^0-9A-Z-]/g, '');
+    if (q.length < 3) return [];
+    const hits: { b: TrackedBody; rank: number }[] = [];
+    for (const b of this.bodies.values()) {
+      const vin = b.vin ?? '';
+      const rank = vin.endsWith(q) ? 0 : vin.includes(q) ? 1 : b.bodyId.toUpperCase().includes(q) ? 2 : -1;
+      if (rank >= 0) hits.push({ b, rank });
+    }
+    hits.sort((x, y) => x.rank - y.rank || y.b.lastTs - x.b.lastTs);
+    return hits.slice(0, limit).map((h) => this.view(h.b, now));
   }
 
   find(idOrVin: string): TrackedBody | undefined {
@@ -327,6 +350,7 @@ export class BodyTracker {
         route: [],
         stations: {},
         stageTimes: {},
+        passes: [],
         history: [],
         lastMarks: new Map(),
         nonconformity: false,
@@ -456,6 +480,7 @@ export class BodyTracker {
     }
     times.in = ts;
     times.out = undefined;
+    this.pass(b, stage.id, 'in', ts);
     b.exited = false;
     if (stage.kind === 'warehouse_out') {
       b.finished = true;
@@ -488,6 +513,7 @@ export class BodyTracker {
     const again = b.exitsCounted.has(counted);
     b.exitsCounted.add(counted);
     times.out = ts;
+    this.pass(b, stage.id, 'out', ts);
     b.exited = true;
     this.place(b, { kind: 'buffer', stageId: stage.id, bufferId: stage.bufferAfter?.id, precision: 'stage', estimated: false }, ts);
     this.log(b, {
@@ -513,6 +539,7 @@ export class BodyTracker {
     }
     if (exitTransition) {
       (b.stageTimes[stage.id] ??= {}).out = ts;
+      this.pass(b, stage.id, 'out', ts);
       this.onTransition?.({ kind: 'exit', body: b, stageId: stage.id, ts, restored: false });
     }
   }
@@ -585,6 +612,18 @@ export class BodyTracker {
       return prev ? { ...s, status: prev.status, at: prev.at, by: prev.by, source: prev.source, loop: 0 } : { ...s, status: 'waiting' as RouteStatus, at: null, by: null, source: null, loop: 0 };
     });
     b.route.splice(at, old.length, ...merged);
+  }
+
+  /** Запись прохода участка: вход открывает проход текущей петли, выход закрывает последний */
+  private pass(b: TrackedBody, stageId: string, kind: 'in' | 'out', ts: number) {
+    const loop = this.loopOf(b, stageId);
+    const last = [...b.passes].reverse().find((p) => p.stageId === stageId);
+    if (kind === 'in') {
+      if (last && last.loop === loop && last.out === undefined) return;
+      b.passes.push({ stageId, loop, in: ts });
+    } else if (last && last.out === undefined) last.out = ts;
+    else if (!last || last.loop !== loop) b.passes.push({ stageId, loop, out: ts });
+    else last.out = ts;
   }
 
   private loopOf(b: TrackedBody, stageId: string): number {

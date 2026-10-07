@@ -45,8 +45,16 @@ export function twinRoutes(app: FastifyInstance, ctx: Ctx) {
     return passport;
   });
 
-  /** Кузова в цехе: где, сколько против нормы, вид и флаги */
-  app.get('/api/v1/bodies', async () => twin.bodies(clock.now()));
+  /** Кузова в цехе: где, сколько против нормы, вид и флаги; с query — поиск по всем кузовам, и уже отгруженным */
+  app.get<{ Querystring: { query?: string; limit?: string } }>('/api/v1/bodies', async (req, reply) => {
+    const query = req.query.query?.trim();
+    if (query === undefined) return twin.bodies(clock.now());
+    if (query.replace(/[^0-9A-Za-z-]/g, '').length < 3) {
+      return reply.code(400).send({ error: 'validation_failed', message: 'Для поиска нужно не меньше 3 знаков VIN или номера кузова' });
+    }
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit ?? 20) || 20));
+    return twin.searchBodies(query, clock.now(), limit);
+  });
 
   /** Кузов по номеру или VIN: маршрут операций и история отметок */
   app.get<{ Params: { id: string } }>('/api/v1/bodies/:id', async (req, reply) => {

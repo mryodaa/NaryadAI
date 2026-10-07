@@ -171,8 +171,14 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
         get: {
           tags: ['Двойник'],
           summary: 'Кузова в цехе: где каждый, сколько на месте против нормы, вид по выполненным операциям, флаги',
-          description: 'Положение — по отметкам кузова (body_checkpoint): до станции, если её отмечают RFID или ПЛК, иначе — до участка с оценкой по норме времени.',
-          responses: { 200: ok('Список кузовов') },
+          description:
+            'Положение — по отметкам кузова (body_checkpoint): до станции, если её отмечают RFID или ПЛК, иначе — до участка с оценкой по норме времени. ' +
+            'С параметром query — поиск по всем кузовам, которые знает двойник, включая уже принятые на склад готовой продукции: часть VIN (например, последние 6 знаков) или номера кузова.',
+          parameters: [
+            { name: 'query', in: 'query', required: false, schema: { type: 'string', minLength: 3 }, description: 'Часть VIN или номера кузова, не меньше 3 знаков: «004812», «B-048»' },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 }, description: 'Сколько результатов вернуть (с query)' },
+          ],
+          responses: { 200: ok('Список кузовов'), 400: { description: 'Слишком короткий запрос поиска' } },
         },
       },
       '/api/v1/bodies/{id}': {

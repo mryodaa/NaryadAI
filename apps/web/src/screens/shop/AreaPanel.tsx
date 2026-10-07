@@ -7,11 +7,13 @@ import { ChevronDown, ChevronUp, CirclePlay, Video, X } from 'lucide-react';
 import type { AreaId } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import type { AreaDetail } from '../../api/types';
-import { Drawer } from '../../components/overlay';
+import { Drawer, useEscLayer } from '../../components/overlay';
 import { SourceBadge } from '../../components/SourceBadge';
 import { StatusChip } from '../../components/ui';
 import { AREA_STATUS, EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num, num1, pct0, timeHM } from '../../lib/format';
+import { useTranslation } from '../../i18n/store';
+import { translateAreaName, translateEquipmentName, translateDynamicText, translateStatus } from '../../i18n/translator';
 
 export function AreaPanel({
   area,
@@ -23,11 +25,10 @@ export function AreaPanel({
   area: AreaId | null;
   onClose: () => void;
   onIncident: (id: string) => void;
-  /** 3D: плавающее окно вместо выезжающей панели */
   floating?: boolean;
-  /** Оборудование, по которому кликнули в 3D, — подсвечено в списке */
   highlight?: string | null;
 }) {
+  const { t } = useTranslation();
   const q = useQuery({
     queryKey: ['area', area],
     queryFn: () => api<AreaDetail>(`/api/v1/areas/${area}`),
@@ -36,18 +37,20 @@ export function AreaPanel({
   });
   const d = q.data;
   const meta = d ? AREA_STATUS[d.status] : null;
+  const areaName = d ? translateAreaName(d.name) : '…';
+  const statusLabel = meta ? translateStatus(meta.label) : '';
   const title = (
     <div className="flex flex-col gap-1.5">
-      <div className="text-[1.375rem] font-semibold leading-tight">{d?.name ?? '…'}</div>
-      {meta && <StatusChip tone={meta.tone} label={meta.label} icon={meta.icon} className="self-start" />}
+      <div className="text-[1.375rem] font-semibold leading-tight">{areaName}</div>
+      {meta && <StatusChip tone={meta.tone} label={statusLabel} icon={meta.icon} className="self-start" />}
     </div>
   );
-  const body = !d ? <p className="text-ink-2">Загружаю…</p> : <AreaBody d={d} onIncident={onIncident} highlight={highlight ?? null} />;
+  const body = !d ? <p className="text-ink-2">{t.common.loading}</p> : <AreaBody d={d} onIncident={onIncident} highlight={highlight ?? null} />;
 
   if (floating) {
     if (!area) return null;
     return (
-      <FloatingWindow key={area} title={title} onClose={onClose} collapsedTitle={d ? `${d.name} · ${meta?.label ?? ''}` : '…'}>
+      <FloatingWindow key={area} title={title} onClose={onClose} collapsedTitle={d ? `${areaName} · ${statusLabel}` : '…'}>
         {body}
       </FloatingWindow>
     );
@@ -60,27 +63,37 @@ export function AreaPanel({
 }
 
 /** Плавающее окно 3D-режима: не затемняет сцену, сворачивается в одну строку, закрывается по Esc */
-function FloatingWindow({ title, collapsedTitle, onClose, children }: { title: ReactNode; collapsedTitle: string; onClose: () => void; children: ReactNode }) {
+export function FloatingWindow({
+  title,
+  collapsedTitle,
+  onClose,
+  children,
+  label,
+}: {
+  title: ReactNode;
+  collapsedTitle: string;
+  onClose: () => void;
+  children: ReactNode;
+  label?: string;
+}) {
+  const { t } = useTranslation();
+  const effectiveLabel = label ?? t.shop.openAreaPanel;
   const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  useEscLayer(onClose);
   return (
-    <aside data-esc-layer aria-label="Панель участка" className="view-in pointer-events-auto flex max-h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-page shadow-pop ring-1 ring-line">
+    <aside data-esc-layer aria-label={effectiveLabel} className="view-in pointer-events-auto flex max-h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-page shadow-pop ring-1 ring-line">
       <header className="flex items-start justify-between gap-2 border-b border-line bg-surface px-4 py-3">
         <div className="min-w-0 flex-1">{collapsed ? <div className="truncate text-lg font-semibold leading-tight">{collapsedTitle}</div> : title}</div>
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
           className="grid size-9 shrink-0 place-items-center rounded-xl text-ink-2 hover:bg-surface-2"
-          aria-label={collapsed ? 'Развернуть панель участка' : 'Свернуть панель участка'}
-          title={collapsed ? 'Развернуть' : 'Свернуть'}
+          aria-label={`${collapsed ? t.common.expand : t.common.collapse}: ${effectiveLabel.toLowerCase()}`}
+          title={collapsed ? t.common.expand : t.common.collapse}
         >
           {collapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
         </button>
-        <button type="button" onClick={onClose} className="grid size-9 shrink-0 place-items-center rounded-xl text-ink-2 hover:bg-surface-2" aria-label="Закрыть">
+        <button type="button" onClick={onClose} className="grid size-9 shrink-0 place-items-center rounded-xl text-ink-2 hover:bg-surface-2" aria-label={t.common.close}>
           <X className="size-5" />
         </button>
       </header>
@@ -90,27 +103,28 @@ function FloatingWindow({ title, collapsedTitle, onClose, children }: { title: R
 }
 
 function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id: string) => void; highlight: string | null }) {
+  const { t } = useTranslation();
   const lit = useRef<HTMLLIElement>(null);
   useEffect(() => {
     lit.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [highlight]);
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-lg leading-snug">{d.summary}</p>
+      <p className="text-lg leading-snug">{translateDynamicText(d.summary)}</p>
 
       {d.signals.length > 0 && (
         <section>
-          <h3 className="mb-2 font-semibold">Откуда мы это знаем</h3>
+          <h3 className="mb-2 font-semibold">{t.shop.howWeKnowThis}</h3>
           <ul className="flex flex-col gap-2">
             {d.signals.map((s, i) => (
               <li key={i} className="flex items-start gap-2.5 rounded-xl bg-surface px-3 py-2 shadow-card">
                 <SourceBadge source={s.source} compact />
-                <span className="flex-1 leading-snug">{s.text}</span>
+                <span className="flex-1 leading-snug">{translateDynamicText(s.text)}</span>
                 <span className="num shrink-0 text-sm text-ink-3">{timeHM(s.ts)}</span>
               </li>
             ))}
           </ul>
-          {!d.plcConnected && <p className="mt-2 text-sm text-ink-3">Данные с контроллеров не подключены — двойник оценивает состояние по 1С:MES.</p>}
+          {!d.plcConnected && <p className="mt-2 text-sm text-ink-3">{t.shop.plcNotConnected}</p>}
         </section>
       )}
 
@@ -121,8 +135,8 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
               <CirclePlay className="size-6" />
             </span>
             <span className="flex flex-col leading-tight">
-              <span className="font-semibold">Видео с поста, 30 сек</span>
-              <span className="text-sm text-white/70">камера участка, {timeHM(d.clip.at)}</span>
+              <span className="font-semibold">{t.shop.postVideo}</span>
+              <span className="text-sm text-white/70">{t.shop.stationCamera(timeHM(d.clip.at))}</span>
             </span>
             <Video className="ml-auto size-5 text-white/60" />
           </a>
@@ -131,14 +145,14 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
 
       {d.stock && (
         <section>
-          <h3 className="mb-2 font-semibold">Запас комплектов (1С:WMS)</h3>
+          <h3 className="mb-2 font-semibold">{t.shop.kitsStock}</h3>
           <ul className="flex flex-col divide-y divide-line rounded-xl bg-surface shadow-card">
             {d.stock.map((s) => {
               const low = s.shiftsLeft !== null && s.shiftsLeft < 2;
               return (
                 <li key={s.kitId} className="flex items-center justify-between gap-3 px-3 py-2">
                   <span>{s.name}</span>
-                  <span className={cx('num font-semibold', low && 'text-st-attention-ink')}>{s.shiftsLeft === null ? '—' : `на ${num1(s.shiftsLeft)} смены`}</span>
+                  <span className={cx('num font-semibold', low && 'text-st-attention-ink')}>{s.shiftsLeft === null ? '—' : t.shop.shiftsRemaining(num1(s.shiftsLeft))}</span>
                 </li>
               );
             })}
@@ -148,7 +162,7 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
 
       {d.equipment.length > 0 && (
         <section>
-          <h3 className="mb-2 font-semibold">Оборудование</h3>
+          <h3 className="mb-2 font-semibold">{t.shop.equipment}</h3>
           <ul className="flex flex-col divide-y divide-line rounded-xl bg-surface shadow-card">
             {d.equipment.map((e) => {
               const st = e.status ? EQUIPMENT_STATUS[e.status] : null;
@@ -156,19 +170,19 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
               return (
                 <li key={e.id} ref={on ? lit : undefined} className={cx('flex flex-col gap-1.5 px-3 py-2.5', on && 'rounded-xl bg-accent-bg ring-2 ring-accent')}>
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium">{e.name}</span>
+                    <span className="font-medium">{translateEquipmentName(e.name)}</span>
                     {st ? (
                       <span className={cx('text-sm font-semibold', st.tone === 'neutral' ? 'text-ink-3' : TONE_CLASS[st.tone].ink)}>
-                        {st.label}
+                        {translateStatus(st.label)}
                         {e.code ? ` · код ${e.code}` : ''}
                       </span>
                     ) : (
-                      <span className="text-sm text-ink-3">нет данных контроллера</span>
+                      <span className="text-sm text-ink-3">{t.shop.noPlcData}</span>
                     )}
                   </div>
                   {e.dp !== null && (
                     <div className="text-sm text-ink-2">
-                      Перепад на фильтре: <span className={cx('num font-semibold', e.dp > 300 ? 'text-st-attention-ink' : 'text-ink')}>{num(e.dp)} Па</span> · норма до 250
+                      {t.shop.filterDiff}: <span className={cx('num font-semibold', e.dp > 300 ? 'text-st-attention-ink' : 'text-ink')}>{num(e.dp)} Pa</span> · {t.shop.normUpTo(250)}
                     </div>
                   )}
                   {e.resourceLeft !== null && (
@@ -176,7 +190,7 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
                       <div className="h-2 flex-1 rounded-full bg-line">
                         <div className={cx('h-2 rounded-full', e.resourceLeft < 0.1 ? 'bg-st-maintenance' : 'bg-st-neutral')} style={{ width: `${Math.max(2, e.resourceLeft * 100)}%` }} />
                       </div>
-                      <span className="num w-[12rem] shrink-0 text-right text-sm text-ink-2">ресурс до ТО {pct0(e.resourceLeft)}</span>
+                      <span className="num w-[12rem] shrink-0 text-right text-sm text-ink-2">{t.shop.resourceToMaint(pct0(e.resourceLeft))}</span>
                     </div>
                   )}
                 </li>
@@ -188,7 +202,7 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
 
       {d.chart.length > 0 && (
         <section>
-          <h3 className="mb-2 font-semibold">{d.chartKind === 'defects' ? 'Брак по часам смены, %' : 'Выпуск по часам смены'}</h3>
+          <h3 className="mb-2 font-semibold">{d.chartKind === 'defects' ? t.shop.defectsPerHour : t.shop.outputPerHour}</h3>
           <div className="h-48 rounded-xl bg-surface px-2 pb-1 pt-3 shadow-card">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={d.chart} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
@@ -196,15 +210,15 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
                 <YAxis tickLine={false} axisLine={false} tick={{ fill: 'var(--ink-3)', fontSize: 13 }} allowDecimals={d.chartKind === 'defects'} />
                 <Tooltip
                   cursor={{ fill: 'var(--surface-2)' }}
-                  formatter={(v) => [d.chartKind === 'defects' ? `${num1(Number(v))}%` : `${v} машин`, d.chartKind === 'defects' ? 'Брак' : 'Выпуск']}
-                  labelFormatter={(l) => `Час с ${l}`}
+                  formatter={(v) => [d.chartKind === 'defects' ? `${num1(Number(v))}%` : `${v} ${t.kpi.carsUnit}`, d.chartKind === 'defects' ? t.kpi.defectsTitle : t.kpi.shiftOutputTitle]}
+                  labelFormatter={(l) => t.shop.hourFrom(String(l ?? ''))}
                 />
                 <Bar dataKey="value" fill={d.chartKind === 'defects' ? 'var(--st-attention)' : 'var(--st-neutral)'} radius={[4, 4, 0, 0]} maxBarSize={24} />
                 <ReferenceLine
                   y={d.chart[0]!.norm}
                   stroke="var(--ink-2)"
                   strokeDasharray="5 4"
-                  label={{ value: d.chartKind === 'defects' ? `норма ${num1(d.chart[0]!.norm)}%` : `норма ${d.chart[0]!.norm} в час`, position: 'insideTopRight', fill: 'var(--ink-2)', fontSize: 13 }}
+                  label={{ value: d.chartKind === 'defects' ? `${t.kpi.defectsNorm} ${num1(d.chart[0]!.norm)}%` : `${t.kpi.defectsNorm} ${d.chart[0]!.norm} / ${t.common.hour}`, position: 'insideTopRight', fill: 'var(--ink-2)', fontSize: 13 }}
                 />
               </BarChart>
             </ResponsiveContainer>
@@ -214,14 +228,14 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
 
       {d.incidents.length > 0 && (
         <section>
-          <h3 className="mb-2 font-semibold">Последние инциденты</h3>
+          <h3 className="mb-2 font-semibold">{t.shop.recentIncidents}</h3>
           <ul className="flex flex-col gap-2">
             {d.incidents.map((i) => (
               <li key={i.id}>
                 <button type="button" onClick={() => onIncident(i.id)} className="flex w-full items-center justify-between gap-3 rounded-xl bg-surface px-3 py-2 text-left shadow-card hover:bg-surface-2">
-                  <span>{i.title}</span>
+                  <span>{translateDynamicText(i.title)}</span>
                   <span className="num shrink-0 text-sm text-ink-3">
-                    {timeHM(i.openedAt)} · {i.status === 'resolved' ? 'закрыт' : i.status === 'decided' ? 'решение принято' : 'открыт'}
+                    {timeHM(i.openedAt)} · {i.status === 'resolved' ? t.shop.statusResolved : i.status === 'decided' ? t.shop.statusDecided : t.shop.statusOpen}
                   </span>
                 </button>
               </li>

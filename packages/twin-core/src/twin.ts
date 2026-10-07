@@ -340,6 +340,11 @@ export class Twin {
     return this.state.tracker.views(now);
   }
 
+  /** Поиск по всем кузовам трекера (и уже принятым на склад): часть VIN или номера кузова */
+  searchBodies(query: string, now: number, limit?: number) {
+    return this.state.tracker.search(query, now, limit);
+  }
+
   /** Кузов по номеру или VIN: маршрут, история, флаги */
   body(idOrVin: string, now: number) {
     const b = this.state.tracker.find(idOrVin);

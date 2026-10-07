@@ -44,26 +44,50 @@ function ToggleButton({ collapsed, onClick, label, className }: { collapsed: boo
 
 type Kpi = LiveSnapshot['kpi'];
 
-/** Верхняя полоса показателей; свёрнутая — одна строка с теми же четырьмя числами */
-export function FloatingKpi({ kpi, now, onWhyPlan }: { kpi: Kpi; now: string; onWhyPlan: () => void }) {
+/**
+ * Верхняя полоса показателей; свёрнутая — одна строка с теми же четырьмя числами.
+ * Пока открыта карточка машины (compact), сворачивается сама — карточке нужна высота экрана;
+ * развернуть можно и тогда (compactOpen), это решает экран: колонка карточки опускается ниже полосы.
+ */
+import { useTranslation } from '../../i18n/store';
+
+export function FloatingKpi({
+  kpi,
+  now,
+  onWhyPlan,
+  compact = false,
+  compactOpen = false,
+  onCompactOpen,
+}: {
+  kpi: Kpi;
+  now: string;
+  onWhyPlan: () => void;
+  compact?: boolean;
+  compactOpen?: boolean;
+  onCompactOpen?: (open: boolean) => void;
+}) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useStoredFlag('float-kpi-collapsed');
-  if (collapsed) {
+  const isCollapsed = compact ? !compactOpen : collapsed;
+  const toggle = (v: boolean) => (compact ? onCompactOpen?.(!v) : setCollapsed(v));
+  if (isCollapsed) {
     return (
-      <div className="view-in flex items-center gap-3 self-start rounded-2xl bg-surface/95 py-1.5 pl-4 pr-1.5 shadow-card ring-1 ring-line backdrop-blur">
+      <div className="view-in flex items-center gap-3 self-start rounded-2xl bg-surface/95 py-1.5 pl-4 pr-1.5 shadow-card ring-1 ring-line">
         <KpiSummary kpi={kpi} />
-        <ToggleButton collapsed onClick={() => setCollapsed(false)} label="Развернуть показатели" />
+        <ToggleButton collapsed onClick={() => toggle(false)} label={t.shop.expandKpi} />
       </div>
     );
   }
   return (
     <div className="view-in relative">
       <KpiStrip kpi={kpi} now={now} onWhyPlan={onWhyPlan} />
-      <ToggleButton collapsed={false} onClick={() => setCollapsed(true)} label="Свернуть показатели" className="absolute -bottom-3 left-1/2 -translate-x-1/2" />
+      <ToggleButton collapsed={false} onClick={() => toggle(true)} label={t.shop.collapseKpi} className="absolute -bottom-3 left-1/2 -translate-x-1/2" />
     </div>
   );
 }
 
 function KpiSummary({ kpi }: { kpi: Kpi }) {
+  const { t } = useTranslation();
   const plan = kpi.monthPlan;
   const lag = kpi.shiftOutput.planToNow - kpi.shiftOutput.done;
   const oeeLow = kpi.oee.value < kpi.oee.norm;
@@ -72,16 +96,16 @@ function KpiSummary({ kpi }: { kpi: Kpi }) {
   return (
     <div className="num flex flex-wrap items-center gap-x-5 gap-y-1 text-base leading-tight">
       <Part bad={!plan.onTrack} icon={plan.onTrack ? CircleCheck : TrendingDown}>
-        {plan.onTrack ? 'Успеваем' : 'Не успеваем'}: <b>{signed(plan.gap)}</b> {plan.onTrack ? 'машин запаса' : 'машин'}
+        {plan.onTrack ? t.kpi.monthPlanOnTrack : t.kpi.monthPlanBehind} <b>{signed(plan.gap)}</b> {plan.onTrack ? t.kpi.carsReserveUnit : t.kpi.carsUnit}
       </Part>
       <Part bad={lag > 2}>
-        Выпуск смены <b>{kpi.shiftOutput.done}</b> из {kpi.shiftOutput.plan}
+        {t.kpi.shiftOutputTitle} <b>{kpi.shiftOutput.done}</b> {t.kpi.monthPlanTarget} {kpi.shiftOutput.plan}
       </Part>
       <Part bad={oeeLow} icon={oeeLow ? TriangleAlert : undefined}>
         OEE <b>{pct0(kpi.oee.value)}</b>
       </Part>
       <Part bad={defectsHigh} icon={defectsHigh ? TriangleAlert : undefined}>
-        Брак за смену <b>{pct1(worst)}</b>
+        {t.kpi.defectsTitle} <b>{pct1(worst)}</b>
       </Part>
     </div>
   );
@@ -110,6 +134,7 @@ export function FloatingAttention({
   onMore: () => void;
   compact: boolean;
 }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useStoredFlag('float-attention-collapsed');
   const [openedInCompact, setOpenedInCompact] = useState(false);
   useEffect(() => {
@@ -127,10 +152,10 @@ export function FloatingAttention({
         type="button"
         onClick={() => toggle(false)}
         aria-expanded={false}
-        className="view-in flex shrink-0 items-center gap-2 self-end rounded-2xl bg-surface/95 py-2 pl-3 pr-2 text-base font-semibold shadow-card ring-1 ring-line backdrop-blur hover:bg-surface"
+        className="view-in flex shrink-0 items-center gap-2 self-end rounded-2xl bg-surface/95 py-2 pl-3 pr-2 text-base font-semibold shadow-card ring-1 ring-line hover:bg-surface"
       >
         <Icon className={cx('size-5 shrink-0', tone === 'neutral' ? 'text-st-neutral' : TONE_CLASS[tone].ink)} strokeWidth={2.25} aria-hidden />
-        Требует внимания
+        {t.shop.attentionTitle}
         <span className={cx('num rounded-md px-1.5 text-sm', urgent.length ? cx(TONE_CLASS[tone].bg, TONE_CLASS[tone].ink) : 'bg-surface-2 text-ink-2')}>{total}</span>
         <ChevronDown className="size-4 text-ink-3" strokeWidth={2.5} aria-hidden />
       </button>
@@ -139,7 +164,7 @@ export function FloatingAttention({
   return (
     <div className="view-in relative min-h-0 shrink overflow-y-auto rounded-2xl">
       <AttentionColumn items={items} total={total} onOpen={onOpen} onMore={onMore} />
-      <ToggleButton collapsed={false} onClick={() => toggle(true)} label="Свернуть «Требует внимания»" className="absolute right-2.5 top-2.5" />
+      <ToggleButton collapsed={false} onClick={() => toggle(true)} label={t.shop.collapseAttention} className="absolute right-2.5 top-2.5" />
     </div>
   );
 }

@@ -66,6 +66,26 @@ function stage0(t: Twin, id: string, upTo = 'finished') {
 }
 
 describe('трекер кузовов', () => {
+  it('проходы участков: вход и выход по порядку, у кузова на участке — время входа', () => {
+    const t = twin();
+    stage0(t, 'B-00001', 'assembly');
+    const b = t.body(VIN, m('09:30'))!;
+    expect(b.stages.map((p) => `${p.stageId}:${p.in?.slice(11, 16) ?? '—'}-${p.out?.slice(11, 16) ?? '…'}`)).toEqual(['warehouse:07:59-08:00', 'weld:08:01-08:20', 'paint:08:30-09:10', 'assembly:09:20-…']);
+    expect(b.stageSince?.slice(11, 16)).toBe('09:20');
+  });
+
+  it('поиск: по последним знакам VIN и номеру кузова, и среди уже принятых на склад', () => {
+    const t = twin();
+    stage0(t, 'B-00001');
+    t.ingest(order('B-00002', m('08:05')));
+    const now = m('10:40');
+    expect(t.searchBodies('004812', now).map((b) => b.bodyId)).toEqual(['B-00001']);
+    expect(t.searchBodies('b-0000', now).map((b) => b.bodyId).sort()).toEqual(['B-00001', 'B-00002']);
+    expect(t.searchBodies('00002', now).map((b) => b.bodyId)).toEqual(['B-00002']);
+    expect(t.searchBodies('12', now)).toEqual([]);
+    expect(t.searchBodies('004812', now)[0]!.loc.kind).toBe('finished');
+  });
+
   it('нормальный проход: от комплекта до парковки, все операции выполнены по выходу участков', () => {
     const t = twin();
     stage0(t, 'B-00001');

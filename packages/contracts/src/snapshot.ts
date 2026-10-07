@@ -217,6 +217,8 @@ export interface BodyView {
   loc: BodyLocation;
   /** С какого момента на текущем месте */
   since: string;
+  /** С какого момента на текущем участке (вход участка); нет — очередь, склад */
+  stageSince?: string | null;
   /** Норма на текущем месте, с (нет — очередь или склад) */
   normSec: number | null;
   /** Накопленные визуальные эффекты: вид кузова (при точности до участка — с оценкой по времени) */
@@ -257,9 +259,19 @@ export interface BodyHistoryItem {
   restored?: boolean;
 }
 
+/** Проход участка: вход и выход; повторный проход (перекраска) — отдельной записью с loop > 0 */
+export interface BodyStagePass {
+  stageId: string;
+  loop: number;
+  in: string | null;
+  out: string | null;
+}
+
 export interface BodyDetail extends BodyView {
   plannedSeq: number | null;
   trim: string | null;
+  /** Проходы участков по порядку: время входа и выхода */
+  stages: BodyStagePass[];
   route: BodyRouteStepView[];
   history: BodyHistoryItem[];
 }
