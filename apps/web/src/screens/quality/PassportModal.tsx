@@ -1,16 +1,21 @@
 // Паспорт автомобиля: вертикальная лента маршрута кузова с условиями в момент прохода.
 import { useQuery } from '@tanstack/react-query';
-import { CircleCheck, TriangleAlert } from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { Box, CircleCheck, TriangleAlert } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Passport } from '../../api/types';
 import { Modal } from '../../components/overlay';
 import { SourceBadge } from '../../components/SourceBadge';
 import { TONE_CLASS, cx } from '../../lib/tones';
+import { ENABLE_3D } from '../../lib/features';
+import { webglSupport } from '../../lib/webgl';
+import { showVinPath } from '../../state/view';
 import { dateTime, timeHM } from '../../lib/format';
 
 export function PassportModal({ vin, onClose }: { vin: string | null; onClose: () => void }) {
   const q = useQuery({ queryKey: ['passport', vin], queryFn: () => api<Passport>(`/api/v1/vin/${vin}`), enabled: !!vin, retry: false });
   const p = q.data;
+  const navigate = useNavigate();
   // события по времени: проходы постов и отметки контроля
   const timeline = p
     ? [...p.steps.map((s) => ({ kind: 'step' as const, at: s.at, step: s })), ...p.checks.map((c) => ({ kind: 'check' as const, at: c.at, check: c }))].sort(
@@ -29,6 +34,20 @@ export function PassportModal({ vin, onClose }: { vin: string | null; onClose: (
             <div className="text-base text-ink-2">
               {p.modelName} · {p.where}
             </div>
+          )}
+          {p && ENABLE_3D && webglSupport() !== 'none' && p.steps.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
+                showVinPath(p.vin, p.steps.map((s) => s.post));
+                onClose();
+                navigate('/?view=3d');
+              }}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-accent-bg px-3 py-1.5 text-base font-semibold text-accent-ink hover:bg-[#dfe8fb] print:hidden"
+            >
+              <Box className="size-4" strokeWidth={2.25} aria-hidden />
+              Показать путь в 3D
+            </button>
           )}
         </div>
       }

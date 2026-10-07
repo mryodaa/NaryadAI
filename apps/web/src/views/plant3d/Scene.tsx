@@ -1,0 +1,513 @@
+// Сцена цеха: пол, зоны участков с контуром статуса, буферы, оборудование, кузова, плашки.
+// Состояние — только из данных двойника; переходы цвета и положения плавные.
+import { memo, useMemo, useRef, type RefObject } from 'react';
+import { useFrame, type ThreeEvent } from '@react-three/fiber';
+import { ContactShadows, Grid, Html, Line } from '@react-three/drei';
+import { Color, MeshStandardMaterial, Object3D, type InstancedMesh } from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { Activity, Clock, Video, Wrench } from 'lucide-react';
+import { AREA_BY_ID, CAMERAS, type AreaId, type BufferView, type Tone } from '@allur/contracts/ref';
+import { FLOW } from '../../state/selectors';
+import { openIncident } from '../../state/view';
+import { TONE_CLASS, TONE_ICON, cx } from '../../lib/tones';
+import { BODY, FLOOR_Y, PRODUCING, type PlantLayout, type Rect } from './layout';
+import type { Palette } from './palette';
+import type { FlowModel } from './flow';
+import type { Plaque, SceneData } from './useSceneData';
+import { EquipmentModel, FinishedContent, GhostFader, WarehouseContent, useMaterials, type HoverTarget } from './equipment';
+import { damp, requestAmbient } from './ticker';
+
+const MAX_BODIES = 90;
+/** Слои подписей: плашки поверх подписей зон, всё — ниже плавающих панелей интерфейса */
+const Z_LABEL: [number, number] = [20, 10];
+const Z_PLAQUE: [number, number] = [40, 21];
+
+type Portal = RefObject<HTMLElement | null>;
+
+export interface SceneProps {
+  layout: PlantLayout;
+  palette: Palette;
+  data: SceneData;
+  buffers: BufferView[];
+  stage: 0 | 1 | 2;
+  flow: FlowModel;
+  focusArea: AreaId | null;
+  reducedMotion: boolean;
+  /** Постоянный слой для подписей поверх холста: подписи не пересоздаются при старте сцены */
+  portal: Portal;
+  /** Путь кузова по VIN (из паспорта автомобиля) */
+  vinPath: { vin: string; posts: string[] } | null;
+  onHover: (t: HoverTarget | null) => void;
+  onPick: (area: AreaId, equipmentId: string | null) => void;
+}
+
+export function Scene(props: SceneProps) {
+  const { layout, palette, data, stage, flow, focusArea, reducedMotion, portal, onHover, onPick } = props;
+  const mats = useMaterials(palette);
+  const live = data.plcConnected && stage >= 1;
+  const b = layout.bounds;
+  const midX = (b.x0 + b.x1) / 2;
+  const width = b.x1 - b.x0;
+  return (
+    <>
+      <color attach="background" args={[palette.background]} />
+      <hemisphereLight args={['#ffffff', '#e3e7ec', 2.1]} />
+      <directionalLight position={[midX - 50, 80, 60]} intensity={1.5} />
+
+      <mesh position={[midX, 0, 0]} rotation-x={-Math.PI / 2}>
+        <planeGeometry args={[1800, 1800]} />
+        <meshBasicMaterial color={palette.floor} />
+      </mesh>
+      <Grid
+        position={[midX, 0.004, 0]}
+        args={[width + 160, 160]}
+        cellSize={2}
+        cellThickness={0.6}
+        cellColor={palette.grid}
+        sectionSize={10}
+        sectionThickness={1}
+        sectionColor={palette.gridSection}
+        fadeDistance={300}
+        fadeStrength={1.6}
+      />
+      {/* разметка проходов вдоль линии */}
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[midX, 0.008, s * (layout.zones.weld.z1 + 1.3)]} rotation-x={-Math.PI / 2}>
+          <planeGeometry args={[width + 8, 0.34]} />
+          <meshBasicMaterial color={palette.aisle} />
+        </mesh>
+      ))}
+
+      {FLOW.map((area, i) => (
+        <Zone
+          key={area}
+          id={area}
+          rect={layout.zones[area]}
+          name={data.rows[area]?.name ?? area}
+          tone={data.rows[area]?.status.tone ?? 'neutral'}
+          statusLabel={data.rows[area]?.status.label ?? ''}
+          selected={focusArea === area}
+          dimmed={focusArea !== null && focusArea !== area}
+          labelY={i % 2 ? 10.2 : 7.6}
+          palette={palette}
+          reducedMotion={reducedMotion}
+          portal={portal}
+          onHover={onHover}
+          onPick={onPick}
+        />
+      ))}
+
+      {props.buffers.map((buf) => (
+        <BufferPad key={buf.id} rect={layout.buffers[buf.id]} buf={buf} palette={palette} portal={portal} onHover={onHover} />
+      ))}
+
+      <GhostFader mats={mats} palette={palette} ghost={!live} />
+      {layout.equipment.map((place) => (
+        <EquipmentModel
+          key={place.id}
+          place={place}
+          view={data.equipment[place.id]}
+          mats={mats}
+          palette={palette}
+          layout={layout}
+          live={live}
+          reducedMotion={reducedMotion}
+          onHover={onHover}
+          onPick={onPick}
+        />
+      ))}
+      <WarehouseContent layout={layout} stock={data.stock} mats={mats} palette={palette} />
+      <FinishedContent layout={layout} mats={mats} />
+
+      <Bodies flow={flow} palette={palette} />
+      {props.vinPath && <VinPath layout={layout} posts={props.vinPath.posts} />}
+
+      <Plaques layout={layout} data={data} portal={portal} />
+      {stage >= 1 && <CameraIcons layout={layout} portal={portal} />}
+      {stage >= 2 && <SensorBadges layout={layout} data={data} portal={portal} onHover={onHover} />}
+
+      <Shadows x={midX} width={width} />
+    </>
+  );
+}
+
+/**
+ * Мягкие тени считаются один раз. Отдельный неизменяемый компонент: у drei ContactShadows массив scale —
+ * в зависимостях, и перерисовка сцены на каждый снимок пересоздавала бы его текстуры (утечка видеопамяти).
+ */
+const Shadows = memo(function Shadows({ x, width }: { x: number; width: number }) {
+  const scale = useMemo<[number, number]>(() => [width + 30, 50], [width]);
+  return <ContactShadows position={[x, 0.01, 0]} scale={scale} resolution={1024} blur={3} far={5} opacity={0.22} frames={1} color="#3d4652" />;
+});
+
+// ---------------------------------------------------------------------------
+// Зона участка: платформа, низкие полупрозрачные стены, контур цвета статуса, подпись
+
+function Zone({
+  id,
+  rect,
+  name,
+  tone,
+  statusLabel,
+  selected,
+  dimmed,
+  labelY,
+  palette,
+  reducedMotion,
+  portal,
+  onHover,
+  onPick,
+}: {
+  id: AreaId;
+  rect: Rect;
+  name: string;
+  tone: Tone;
+  statusLabel: string;
+  selected: boolean;
+  /** выбран другой участок — подпись этой зоны не нужна в кадре */
+  dimmed: boolean;
+  labelY: number;
+  palette: Palette;
+  reducedMotion: boolean;
+  portal: Portal;
+  onHover: (t: HoverTarget | null) => void;
+  onPick: (area: AreaId, equipmentId: string | null) => void;
+}) {
+  const w = rect.x1 - rect.x0;
+  const d = rect.z1 - rect.z0;
+  const midX = (rect.x0 + rect.x1) / 2;
+  const midZ = (rect.z0 + rect.z1) / 2;
+  const deviation = tone !== 'neutral';
+  const wall = useMemo(() => new MeshStandardMaterial({ color: palette.wall, transparent: true, opacity: 0.3, depthWrite: false, roughness: 0.9 }), [palette]);
+  const lineRef = useRef<{ material: { color: Color; opacity: number; linewidth: number } } | null>(null);
+  // начальный цвет контура задаём один раз — дальше он плавно меняется в кадре
+  const initial = useMemo(() => '#' + (deviation ? palette.tone[tone] : palette.edge).getHexString(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const wallTarget = useMemo(() => new Color(), []);
+  const lineTarget = useMemo(() => new Color(), []);
+  const accent = useMemo(() => new Color('#2b5fd9'), []);
+  // точки контура — один раз: новый массив на каждый снимок заставлял бы drei пересоздавать линию и её шейдер
+  const outline = useMemo<[number, number, number][]>(() => {
+    const y = FLOOR_Y + 0.03;
+    return [
+      [rect.x0, y, rect.z0],
+      [rect.x1, y, rect.z0],
+      [rect.x1, y, rect.z1],
+      [rect.x0, y, rect.z1],
+      [rect.x0, y, rect.z0],
+    ];
+  }, [rect]);
+
+  useFrame((state, dt) => {
+    const line = lineRef.current;
+    if (!line) return;
+    wallTarget.copy(deviation ? palette.tone[tone] : palette.wall);
+    lineTarget.copy(deviation ? palette.tone[tone] : selected ? accent : palette.edge);
+    const k = 1 - Math.exp(-5 * Math.min(dt, 0.1));
+    const beforeWall = wall.color.getHex();
+    const beforeLine = line.material.color.getHex();
+    const beforeWidth = line.material.linewidth;
+    wall.color.lerp(wallTarget, k);
+    wall.opacity = damp(wall.opacity, deviation ? 0.42 : 0.28, 5, dt);
+    line.material.color.lerp(lineTarget, k);
+    line.material.linewidth = damp(line.material.linewidth, selected ? 5 : deviation ? 3.6 : 1.4, 6, dt);
+    // авария — мягкая пульсация контура, не мигание; при «уменьшить движение» — без неё
+    const pulse = tone === 'fault' && !reducedMotion;
+    line.material.opacity = pulse ? 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(state.clock.elapsedTime * 2.4)) : 1;
+    if (pulse) requestAmbient(state.invalidate);
+    else if (wall.color.getHex() !== beforeWall || line.material.color.getHex() !== beforeLine || Math.abs(line.material.linewidth - beforeWidth) > 0.01) state.invalidate();
+  });
+
+  const Icon = TONE_ICON[tone];
+  const walls: [number, number, number, number][] = [
+    [midX, rect.z0 + 0.06, w, 0.12],
+    [midX, rect.z1 - 0.06, w, 0.12],
+    [rect.x0 + 0.06, midZ, 0.12, d],
+    [rect.x1 - 0.06, midZ, 0.12, d],
+  ];
+  return (
+    <group>
+      <mesh
+        position={[midX, FLOOR_Y / 2, midZ]}
+        onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover({ kind: 'zone', id });
+        }}
+        onPointerOut={() => onHover(null)}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
+          if (e.delta > 6) return;
+          e.stopPropagation();
+          onPick(id, null);
+        }}
+      >
+        <boxGeometry args={[w, FLOOR_Y, d]} />
+        <meshBasicMaterial color={palette.platform} />
+      </mesh>
+      {walls.map(([x, z, sx, sz], i) => (
+        <mesh key={i} position={[x, FLOOR_Y + 0.45, z]} material={wall}>
+          <boxGeometry args={[sx, 0.9, sz]} />
+        </mesh>
+      ))}
+      <Line
+        ref={lineRef as never}
+        points={outline}
+        color={initial}
+        lineWidth={1.4}
+        transparent
+      />
+      {!dimmed && (
+      <Html portal={portal as never} position={[midX, labelY, rect.z0 + 0.6]} center zIndexRange={Z_LABEL} pointerEvents="none">
+        <div className="flex select-none flex-col items-center gap-1">
+          <span className={cx('max-w-[9.5rem] rounded-lg px-2.5 py-1 text-center text-base font-semibold leading-tight shadow-card transition-colors', selected ? 'bg-ink text-white' : 'bg-surface/95 text-ink')}>
+            {name}
+          </span>
+          {deviation && (
+            <span className={cx('view-in inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-0.5 text-sm font-semibold shadow-card', TONE_CLASS[tone].bg, TONE_CLASS[tone].ink)}>
+              <Icon className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden />
+              {statusLabel}
+            </span>
+          )}
+        </div>
+      </Html>
+      )}
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Буфер между участками: площадка и число кузовов — те же цифры, что в «Панели»
+
+function BufferPad({ rect, buf, palette, portal, onHover }: { rect: Rect; buf: BufferView; palette: Palette; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
+  const w = rect.x1 - rect.x0;
+  const d = rect.z1 - rect.z0;
+  const midX = (rect.x0 + rect.x1) / 2;
+  const midZ = (rect.z0 + rect.z1) / 2;
+  const full = buf.count >= buf.capacity;
+  const empty = buf.count === 0;
+  const outline = useMemo<[number, number, number][]>(
+    () => [
+      [rect.x0, 0.03, rect.z0],
+      [rect.x1, 0.03, rect.z0],
+      [rect.x1, 0.03, rect.z1],
+      [rect.x0, 0.03, rect.z1],
+      [rect.x0, 0.03, rect.z0],
+    ],
+    [rect],
+  );
+  const edge = useMemo(() => '#' + palette.edge.getHexString(), [palette]);
+  return (
+    <group>
+      <mesh
+        position={[midX, 0.012, midZ]}
+        rotation-x={-Math.PI / 2}
+        onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover({ kind: 'buffer', id: buf.id });
+        }}
+        onPointerOut={() => onHover(null)}
+      >
+        <planeGeometry args={[w, d]} />
+        <meshBasicMaterial color={palette.pad} />
+      </mesh>
+      <Line
+        points={outline}
+        color={edge}
+        lineWidth={1}
+        dashed
+        dashSize={0.8}
+        gapSize={0.6}
+      />
+      <Html portal={portal as never} position={[midX, 0.3, rect.z1 + 1.2]} center zIndexRange={Z_LABEL} pointerEvents="none">
+        <span
+          className={cx(
+            'num select-none whitespace-nowrap rounded-md px-1.5 py-0.5 text-sm font-semibold shadow-card',
+            full || empty ? cx(TONE_CLASS.waiting.bg, TONE_CLASS.waiting.ink) : 'bg-surface/95 text-ink-2',
+          )}
+        >
+          {buf.count} из {buf.capacity}
+          {full ? ' · полон' : empty ? ' · пуст' : ''}
+        </span>
+      </Html>
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Путь кузова по VIN: посты из паспорта по порядку — по линии и поперёк, как ездят кузова
+
+const VIN_COLOR = '#2b5fd9';
+
+function VinPath({ layout, posts }: { layout: PlantLayout; posts: string[] }) {
+  const points = useMemo(() => {
+    const pts: [number, number, number][] = [];
+    for (const id of posts) {
+      const s = layout.postSpots[id] ?? (id === 'FG-IN' ? layout.segSpots.finished[0] : undefined);
+      if (!s) continue;
+      const last = pts[pts.length - 1];
+      if (last && Math.abs(last[2] - s.z) > 0.5 && Math.abs(last[0] - s.x) > 0.5) pts.push([Math.abs(last[2]) < 0.5 ? s.x : last[0], 0.7, Math.abs(last[2]) < 0.5 ? last[2] : s.z]);
+      pts.push([s.x, 0.7, s.z]);
+    }
+    return pts;
+  }, [layout, posts]);
+  if (points.length < 2) return null;
+  const end = points[points.length - 1]!;
+  return (
+    <group>
+      <Line points={points} color={VIN_COLOR} lineWidth={5} />
+      <mesh position={[end[0], 3.4, end[2]]}>
+        <sphereGeometry args={[0.65, 20, 14]} />
+        <meshStandardMaterial color={VIN_COLOR} emissive={VIN_COLOR} emissiveIntensity={0.35} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Кузова: один InstancedMesh, нейтральный серый (цвет в сцене — только статусы)
+
+function Bodies({ flow, palette }: { flow: FlowModel; palette: Palette }) {
+  const ref = useRef<InstancedMesh>(null);
+  const geometry = useMemo(() => new RoundedBoxGeometry(BODY.length, BODY.height, BODY.width, 2, 0.42), []);
+  const material = useMemo(() => new MeshStandardMaterial({ color: palette.body, roughness: 0.6 }), [palette]);
+  const dummy = useMemo(() => new Object3D(), []);
+  useFrame((state) => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    const { count, moving } = flow.frame(performance.now(), (i, x, z, rot, s) => {
+      if (i >= MAX_BODIES) return;
+      const k = Math.max(0.001, s);
+      dummy.position.set(x, FLOOR_Y + (BODY.height / 2) * k, z);
+      dummy.rotation.set(0, rot, 0);
+      dummy.scale.setScalar(k);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    });
+    mesh.count = Math.min(count, MAX_BODIES);
+    mesh.instanceMatrix.needsUpdate = true;
+    if (moving) state.invalidate();
+  });
+  return <instancedMesh ref={ref} args={[geometry, material, MAX_BODIES]} frustumCulled={false} />;
+}
+
+// ---------------------------------------------------------------------------
+// Плашки: проблемы (не больше трёх — как «Требует внимания») и принятые решения
+
+function anchorOf(layout: PlantLayout, area: AreaId, equipmentId: string | undefined): [number, number, number] {
+  const e = equipmentId ? layout.equipment.find((x) => x.id === equipmentId) : undefined;
+  if (e) return [e.span ? e.span[0] + 1.2 : e.x, FLOOR_Y + e.height + 2.2, e.z + 3];
+  const r = layout.zones[area];
+  return [(r.x0 + r.x1) / 2, 4.5, 4];
+}
+
+/** Коротко, как в ТЗ: «Брак 10,0% и растёт», «ABB-04: ресурс до ТО 6%» — участок и так подписан над зоной */
+function shortTitle(p: Plaque): string {
+  const names = [AREA_BY_ID[p.area].short, AREA_BY_ID[p.area].name];
+  let t = p.title;
+  for (const n of names) {
+    for (const prefix of [`${n} стоит: `, `${n}: `]) if (t.startsWith(prefix)) t = t.slice(prefix.length);
+  }
+  t = t.replace(/^Робот /, '');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneData; portal: Portal }) {
+  // соседние плашки не должны наезжать друг на друга: поднимаем следующую, если близко по потоку
+  const items = useMemo(() => {
+    const all = [
+      ...data.plaques.map((p) => ({ key: `p-${p.incidentId}`, kind: 'problem' as const, p, at: anchorOf(layout, p.area, p.equipmentId) })),
+      ...data.decisions.map((d) => ({ key: `d-${d.incidentId}`, kind: 'decision' as const, d, at: anchorOf(layout, d.area, d.equipmentId) })),
+    ].sort((a, b) => a.at[0] - b.at[0]);
+    for (let i = 1; i < all.length; i++) {
+      const prev = all[i - 1]!;
+      const cur = all[i]!;
+      if (Math.abs(cur.at[0] - prev.at[0]) < 14) cur.at = [cur.at[0], Math.max(cur.at[1], prev.at[1] + 3), cur.at[2]];
+    }
+    return all;
+  }, [layout, data.plaques, data.decisions]);
+
+  return (
+    <>
+      {items.map((it) => {
+        if (it.kind === 'problem') {
+          const Icon = TONE_ICON[it.p.tone];
+          return (
+            <Html key={it.key} portal={portal as never} position={it.at} center zIndexRange={Z_PLAQUE}>
+              <button
+                type="button"
+                onClick={() => openIncident(it.p.incidentId)}
+                title={`${it.p.title} — ${it.p.impact}. Открыть инцидент`}
+                className={cx(
+                  'view-in pointer-events-auto inline-flex max-w-[15rem] items-center gap-1.5 whitespace-nowrap rounded-xl border-l-4 bg-surface py-1.5 pl-2 pr-3 text-[0.9375rem] font-semibold text-ink shadow-pop hover:bg-surface-2',
+                  TONE_CLASS[it.p.tone].border,
+                )}
+              >
+                <Icon className={cx('size-4 shrink-0', TONE_CLASS[it.p.tone].ink)} strokeWidth={2.25} aria-hidden />
+                <span className="truncate">{shortTitle(it.p)}</span>
+              </button>
+            </Html>
+          );
+        }
+        return (
+          <Html key={it.key} portal={portal as never} position={it.at} center zIndexRange={Z_PLAQUE}>
+            <button
+              type="button"
+              onClick={() => openIncident(it.d.incidentId)}
+              className={cx(
+                'view-in pointer-events-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-1.5 text-[0.9375rem] font-semibold shadow-pop ring-1',
+                it.d.tone === 'maintenance' ? cx(TONE_CLASS.maintenance.bg, TONE_CLASS.maintenance.ink, 'ring-st-maintenance') : 'bg-surface text-ink ring-line hover:bg-surface-2',
+              )}
+            >
+              {it.d.tone === 'maintenance' ? <Wrench className="size-4 shrink-0" strokeWidth={2.25} aria-hidden /> : <Clock className="size-4 shrink-0" strokeWidth={2.25} aria-hidden />}
+              {it.d.text}
+            </button>
+          </Html>
+        );
+      })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Ступень 1: камеры видеонаблюдения на участках; ступень 2: датчики на приводе и фильтрах
+
+function CameraIcons({ layout, portal }: { layout: PlantLayout; portal: Portal }) {
+  return (
+    <>
+      {PRODUCING.map((area) => {
+        const cam = CAMERAS.find((c) => c.area === area);
+        if (!cam) return null;
+        const r = layout.zones[area];
+        return (
+          <Html key={area} portal={portal as never} position={[r.x0 + 1.4, 3.2, r.z1 - 1.4]} center zIndexRange={Z_LABEL}>
+            <span title={cam.name} className="view-in pointer-events-auto grid size-7 place-items-center rounded-full bg-surface text-ink-2 shadow-card ring-1 ring-line">
+              <Video className="size-4" strokeWidth={2.25} aria-label={cam.name} />
+            </span>
+          </Html>
+        );
+      })}
+    </>
+  );
+}
+
+function SensorBadges({ layout, data, portal, onHover }: { layout: PlantLayout; data: SceneData; portal: Portal; onHover: (t: HoverTarget | null) => void }) {
+  return (
+    <>
+      {data.sensors.map((s) => {
+        const e = layout.equipment.find((x) => x.id === s.equipmentId);
+        if (!e) return null;
+        const at: [number, number, number] = e.kind === 'conveyor' ? [(e.span?.[0] ?? e.x) + 0.9, 2.6, -2.4] : [e.x, FLOOR_Y + 4.3, e.z + 2.5];
+        return (
+          <Html key={s.equipmentId} portal={portal as never} position={at} center zIndexRange={Z_PLAQUE}>
+            <span
+              onMouseEnter={() => onHover({ kind: 'sensor', id: s.equipmentId })}
+              onMouseLeave={() => onHover(null)}
+              className="view-in pointer-events-auto inline-flex cursor-default items-center gap-1 rounded-full bg-ink px-1.5 py-0.5 text-xs font-semibold text-white shadow-card"
+            >
+              <Activity className="size-3.5" strokeWidth={2.5} aria-hidden />
+              датчик
+            </span>
+          </Html>
+        );
+      })}
+    </>
+  );
+}

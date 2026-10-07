@@ -55,7 +55,7 @@ function AttentionCard({ item, onOpen }: { item: AttentionItem; onOpen?: (id: st
         <button
           type="button"
           onClick={() => onOpen?.(item.incidentId)}
-          className="ml-auto inline-flex items-center gap-1 rounded-lg bg-surface px-2.5 py-1 text-base font-semibold text-accent-ink shadow-card hover:bg-accent-bg focus-visible:outline-2 focus-visible:outline-accent"
+          className="ml-auto inline-flex items-center gap-1 rounded-lg bg-surface px-2.5 py-1 text-base font-semibold text-accent-ink shadow-card hover:bg-accent-bg focus-visible:outline-2 focus-visible:outline-accent print:hidden"
         >
           Разобраться
           <ArrowRight className="size-4" strokeWidth={2.5} aria-hidden />

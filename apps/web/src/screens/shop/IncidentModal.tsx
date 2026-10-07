@@ -10,6 +10,7 @@ import { SourceBadge } from '../../components/SourceBadge';
 import { ExplainView } from '../../components/ExplainView';
 import { Button, StatusChip } from '../../components/ui';
 import { useLive } from '../../state/live';
+import { rememberOrder } from '../../state/decisions';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { CARS, money, num, plural, timeHM } from '../../lib/format';
 
@@ -23,7 +24,9 @@ export function IncidentModal({ id, onClose }: { id: string | null; onClose: () 
     mutationFn: (optionId: string) => api<DecisionResponse>('/api/v1/decisions', { method: 'POST', json: { incidentId: id, optionId, decidedBy: 'Начальник производства' } }),
     onSuccess: (r) => {
       setResult(r);
+      if (id && r.workOrder) rememberOrder(id, r.workOrder.scheduledAt);
       void qc.invalidateQueries({ queryKey: ['incident', id] });
+      void qc.invalidateQueries({ queryKey: ['incidents'] });
     },
   });
   const inc = q.data;

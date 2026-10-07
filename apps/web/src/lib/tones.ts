@@ -27,6 +27,14 @@ export const AREA_STATUS: Record<AreaStatus, StatusMeta> = {
   idle: { label: 'Смена не идёт', tone: 'neutral', icon: Moon },
 };
 
+/** Состояние оборудования по контроллеру (ступень 1+) */
+export const EQUIPMENT_STATUS: Record<'run' | 'idle' | 'fault' | 'maintenance', StatusMeta> = {
+  run: { label: 'Работает', tone: 'neutral', icon: CircleCheck },
+  idle: { label: 'Ожидает', tone: 'waiting', icon: Hourglass },
+  fault: { label: 'Авария', tone: 'fault', icon: OctagonX },
+  maintenance: { label: 'Обслуживание', tone: 'maintenance', icon: Wrench },
+};
+
 export const TONE_ICON: Record<Tone, LucideIcon> = {
   neutral: CircleCheck,
   waiting: Hourglass,

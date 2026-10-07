@@ -34,6 +34,11 @@ export function pct0(share: number): string {
   return `${nf0.format(share * 100)}%`;
 }
 
+/** Ускорение времени двойника: «×60», «×1,5» */
+export function speedLabel(speed: number): string {
+  return `×${Number.isInteger(speed) ? nf0.format(speed) : nf1.format(speed)}`;
+}
+
 export function money(tenge: number): string {
   return `${nf0.format(Math.round(tenge))} ₸`;
 }
@@ -83,3 +88,4 @@ export function plural(n: number, forms: [string, string, string]): string {
 }
 
 export const CARS: [string, string, string] = ['машина', 'машины', 'машин'];
+export const BODIES: [string, string, string] = ['кузов', 'кузова', 'кузовов'];

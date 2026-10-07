@@ -40,7 +40,7 @@ export function WhyButton({ onClick, label = 'Почему?' }: { onClick?: () =
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-base font-medium text-accent-ink hover:bg-accent-bg focus-visible:outline-2 focus-visible:outline-accent"
+      className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-base font-medium text-accent-ink hover:bg-accent-bg focus-visible:outline-2 focus-visible:outline-accent print:hidden"
     >
       <CircleHelp className="size-[1.05em]" strokeWidth={2.25} aria-hidden />
       {label}
@@ -52,16 +52,19 @@ export function Button({
   children,
   onClick,
   variant = 'secondary',
+  type = 'button',
   className,
 }: {
   children: ReactNode;
   onClick?: () => void;
   variant?: 'primary' | 'secondary';
+  /** submit — отправляет форму, в которой стоит */
+  type?: 'button' | 'submit';
   className?: string;
 }) {
   return (
     <button
-      type="button"
+      type={type}
       onClick={onClick}
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-1.5 text-base font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',

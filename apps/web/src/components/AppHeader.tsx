@@ -28,7 +28,7 @@ export function AppHeader({ now, shiftIndex, speed }: { now: string | null; shif
   const navigate = useNavigate();
 
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur print:hidden">
       <div className="flex h-14 items-center gap-5 px-4 xl:px-6">
         <div className="flex shrink-0 items-center gap-2.5">
           <img src="/favicon.svg" alt="" className="size-8" />
