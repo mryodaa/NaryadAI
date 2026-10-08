@@ -6,6 +6,7 @@ import { stageShort, usePlantModel } from '../../state/plant';
 import { api } from '../../api/client';
 import type { EquipmentOverview } from '../../api/types';
 import { Card } from '../../components/ui';
+import { DownloadButton } from '../../components/DownloadButton';
 import { Booting } from '../../components/Booting';
 import { IncidentModal } from '../shop/IncidentModal';
 import { cx } from '../../lib/tones';
@@ -32,7 +33,10 @@ export function EquipmentScreen() {
 
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.equipment.title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.equipment.title}</h1>
+        <DownloadButton type="downtimes" formats={['xlsx', 'csv', 'pdf']} params={{ by: t.reports.managerRole }} label={t.reports.downtimes} />
+      </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 xl:gap-4">
         <Card className="p-4">

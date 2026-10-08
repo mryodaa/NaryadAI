@@ -653,6 +653,24 @@ export const kk: Translations = {
     viewPanel: 'Панель',
     view3d: '3D цех',
   },
+  // TODO перевод: раздел пока по-русски
+  reports: {
+    preparing: 'Готовлю файл…',
+    otherFormats: 'Другие форматы',
+    retry: 'Повторить',
+    failed: (m) => `Не получилось: ${m}`,
+    formats: { pdf: 'PDF', docx: 'Word', xlsx: 'Excel', csv: 'CSV' },
+    formatHints: { pdf: 'для печати и отправки', docx: 'можно править', xlsx: 'таблицы и формулы', csv: 'для других систем' },
+    shiftSummary: 'Сводка за смену',
+    shiftPdf: 'Скачать сводку',
+    areaShift: 'Отчёт за смену',
+    downtimes: 'Журнал простоев за 7 дней',
+    passport: 'Скачать паспорт',
+    incident: 'Отчёт по инциденту',
+    quality: 'Отчёт по качеству за 7 дней',
+    plan: 'План и прогноз',
+    managerRole: 'Руководитель (экран руководителя)',
+  },
   domain: {
     areas: {
       warehouse: { name: 'Машина жиынтықтары қоймасы', short: 'Қойма' },

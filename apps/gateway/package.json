@@ -17,15 +17,20 @@
     "@fastify/swagger-ui": "^6.1.1",
     "@fastify/websocket": "^11.3.3",
     "aedes": "^1.2.0",
+    "docx": "^9.9.0",
+    "exceljs": "^4.4.0",
     "fastify": "^5.12.5",
+    "pdfmake": "^0.2.23",
     "tsx": "^4.23.15",
     "ws": "^8.18.0",
     "yaml": "^2.8.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/pdfmake": "^0.2.13",
     "@types/ws": "^8.18.0",
     "mqtt": "^5.16.0",
+    "pdfjs-dist": "^4.10.38",
     "vitest": "^5.0.3"
   }
 }

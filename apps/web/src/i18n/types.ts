@@ -648,6 +648,23 @@ export interface Translations {
     viewPanel: string;
     view3d: string;
   };
+  reports: {
+    preparing: string;
+    otherFormats: string;
+    retry: string;
+    failed: (message: string) => string;
+    formats: Record<'pdf' | 'docx' | 'xlsx' | 'csv', string>;
+    formatHints: Record<'pdf' | 'docx' | 'xlsx' | 'csv', string>;
+    shiftSummary: string;
+    shiftPdf: string;
+    areaShift: string;
+    downtimes: string;
+    passport: string;
+    incident: string;
+    quality: string;
+    plan: string;
+    managerRole: string;
+  };
   domain: {
     areas: Record<string, { name: string; short: string }>;
     statuses: Record<string, string>;

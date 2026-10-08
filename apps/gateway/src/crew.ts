@@ -380,6 +380,20 @@ export class Crew {
       return { area, shift: null, startsAt: null, endsAt: null, summary: { done: 0, plan: 0, downtimeMin: 0, withoutReason: 0, openRequests: 0 }, hours: [], close: null, prevNote };
     }
     const shift = { key: s.key, startMs: s.startMs, endMs: s.endMs };
+    return {
+      area,
+      shift: s.key,
+      startsAt: toPlantIso(s.startMs),
+      endsAt: toPlantIso(s.endMs),
+      summary: this.summary(area, shift, now),
+      hours: this.hours(area, shift, now),
+      close: this.closes.find((c) => c.area === area && c.shift === s.key) ?? null,
+      prevNote,
+    };
+  }
+
+  /** Выпуск по часам: план по такту и факт выхода с участка */
+  private hours(area: string, s: { startMs: number; endMs: number }, now: number): CrewShiftView['hours'] {
     const takt = this.twin.twin.cfg.taktMin;
     const passes = this.twin.twin.state.passes;
     const hours: CrewShiftView['hours'] = [];
@@ -388,16 +402,31 @@ export class Crew {
       const fact = passes.filter((p) => p.kind === 'exit' && p.area === area && p.ts >= h && p.ts < to).length;
       hours.push({ hour: toPlantIso(h).slice(11, 16), plan: Math.floor((to - h) / 60_000 / takt), fact });
     }
+    return hours;
+  }
+
+  /**
+   * Для отчётов: смена участка целиком — сводка и выпуск по часам (те же расчёты, что на вкладке «Смена»),
+   * записи журнала, сдача смены и заметка прошлой смены. Журнал — в памяти прогона.
+   */
+  shiftRecord(area: string, shift: { key: string; startMs: number; endMs: number }, now: number) {
+    const prev = [...this.closes].reverse().find((c) => c.area === area && c.note && Date.parse(c.at) <= shift.startMs + 60_000 && c.shift !== shift.key);
     return {
-      area,
-      shift: s.key,
-      startsAt: toPlantIso(s.startMs),
-      endsAt: toPlantIso(s.endMs),
       summary: this.summary(area, shift, now),
-      hours,
-      close: this.closes.find((c) => c.area === area && c.shift === s.key) ?? null,
-      prevNote,
+      hours: this.hours(area, shift, now),
+      entries: this.log.filter((e) => e.area === area && e.shift === shift.key),
+      close: this.closes.find((c) => c.area === area && c.shift === shift.key) ?? null,
+      prevNote: prev?.note ? { note: prev.note, by: prev.closedBy, at: prev.at } : null,
     };
+  }
+
+  /** Для отчётов: весь журнал прогона и все сигналы с ответами мастера */
+  journal(): readonly LogEntry[] {
+    return this.log;
+  }
+
+  allSignals(): CrewSignal[] {
+    return [...this.signals.values()];
   }
 
   /** «Сдать смену»: сводка собирается сама, мастер по желанию дописывает одну заметку следующей смене */

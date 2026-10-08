@@ -10,6 +10,8 @@ import type { AreaDetail } from '../../api/types';
 import { Drawer, useEscLayer } from '../../components/overlay';
 import { SourceBadge } from '../../components/SourceBadge';
 import { StatusChip } from '../../components/ui';
+import { DownloadButton } from '../../components/DownloadButton';
+import { usePlantModel } from '../../state/plant';
 import { AREA_STATUS, EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num, num1, pct0, timeHM } from '../../lib/format';
 import { useTranslation } from '../../i18n/store';
@@ -108,9 +110,11 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
   useEffect(() => {
     lit.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [highlight]);
+  const production = usePlantModel().production.some((s) => s.id === d.area);
   return (
     <div className="flex flex-col gap-5">
       <p className="text-lg leading-snug">{translateDynamicText(d.summary, lang)}</p>
+      {production && <DownloadButton type="shift" formats={['pdf', 'docx', 'xlsx']} params={{ area: d.area, by: t.reports.managerRole }} label={t.reports.areaShift} className="self-start" />}
 
       {d.signals.length > 0 && (
         <section>

@@ -82,6 +82,11 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
         description:
           'Состав цеха: участки по потоку, параллельные станции, оборудование и его подключение. Каждое применение — новая версия, откат возможен. После применения двойник, интерфейс (WebSocket, сообщение plant) и имитаторы (MQTT allur/kst/twin/plant-config) перестраиваются без перезапуска.',
       },
+      {
+        name: 'Отчёты',
+        description:
+          'Отчёты файлами (PDF, Word, Excel, CSV) собирает шлюз из тех же расчётов, что видны на экранах. В каждом файле — шапка (завод, участок, период, когда и кем сформирован) и пометка: прототип, данные синтетические, деньги условные.',
+      },
       { name: 'Демо', description: 'Управление демонстрацией. В реальном внедрении не используется' },
     ],
     paths: {
@@ -187,6 +192,49 @@ export function buildOpenApiDocument(opts: { serverUrl?: string } = {}) {
           summary: 'Кузов по номеру или VIN: маршрут операций, история отметок, восстановленные отметки и петли перекраски',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Номер кузова (B-04812) или VIN' }],
           responses: { 200: ok('Кузов'), 404: { description: 'Кузов не найден' } },
+        },
+      },
+      '/api/v1/reports/{type}': {
+        get: {
+          tags: ['Отчёты'],
+          summary: 'Отчёт файлом: сводка смены, журнал простоев, паспорт автомобиля, инцидент, качество, план',
+          description: [
+            'Форматы по типам (первый — по умолчанию):',
+            '',
+            '- `shift` — сводка смены участка: pdf, docx, xlsx. Параметры: `area` (обязательно), `date` и `shift` (1 или 2; по умолчанию идущая или последняя смена).',
+            '- `downtimes` — журнал простоев за период: xlsx, csv, pdf. Параметры: `from`, `to` (по умолчанию последние 7 дней), `area` (все — без параметра или `all`).',
+            '- `vin` — паспорт автомобиля: pdf, docx. Параметр: `vin` (VIN или номер кузова).',
+            '- `incident` — отчёт по инциденту: pdf, docx. Параметр: `incidentId`.',
+            '- `quality` — качество за период: xlsx, pdf. Параметры: `from`, `to`, `area`.',
+            '- `plan` — план и прогноз месяца: xlsx.',
+            '',
+            "Имя файла — по-русски в `Content-Disposition` (`filename*=UTF-8''…`) с ASCII-запасным `filename`. CSV — UTF-8 с BOM и разделителем «;», открывается в Excel на Windows.",
+          ].join('\n'),
+          parameters: [
+            { name: 'type', in: 'path', required: true, schema: { type: 'string', enum: ['shift', 'downtimes', 'vin', 'incident', 'quality', 'plan'] } },
+            { name: 'format', in: 'query', required: false, schema: { type: 'string', enum: ['pdf', 'docx', 'xlsx', 'csv'] }, description: 'Формат файла; неподдерживаемый для типа — 400' },
+            { name: 'area', in: 'query', required: false, schema: { type: 'string' }, description: 'Участок: paint, weld, assembly…' },
+            { name: 'date', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Дата смены, ГГГГ-ММ-ДД' },
+            { name: 'shift', in: 'query', required: false, schema: { type: 'string', enum: ['1', '2'] }, description: 'Номер смены: 1 — 08:00–16:00, 2 — 16:00–24:00' },
+            { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Начало периода, ГГГГ-ММ-ДД' },
+            { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Конец периода, ГГГГ-ММ-ДД (включительно)' },
+            { name: 'vin', in: 'query', required: false, schema: { type: 'string' }, description: 'VIN или номер кузова' },
+            { name: 'incidentId', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'by', in: 'query', required: false, schema: { type: 'string', maxLength: 80 }, description: 'Кто формирует — для шапки файла' },
+          ],
+          responses: {
+            200: {
+              description: 'Файл отчёта',
+              content: {
+                'application/pdf': { schema: { type: 'string', format: 'binary' } },
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { schema: { type: 'string', format: 'binary' } },
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: { type: 'string', format: 'binary' } },
+                'text/csv': { schema: { type: 'string' } },
+              },
+            },
+            400: { description: 'Формат не поддерживается для этого отчёта или не хватает параметров' },
+            404: { description: 'Участок, смена, кузов или инцидент не найдены' },
+          },
         },
       },
       '/api/v1/sources': {

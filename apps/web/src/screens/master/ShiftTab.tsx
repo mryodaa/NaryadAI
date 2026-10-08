@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CrewShiftView } from '@allur/contracts/ref';
 import { api } from '../../api/client';
+import { DownloadButton } from '../../components/DownloadButton';
 import { useTranslation } from '../../i18n/store';
 import { timeHM } from '../../lib/format';
 import { cx } from '../../lib/tones';
@@ -104,6 +105,8 @@ export function ShiftTab({ area, nowIso, by }: { area: string; nowIso: string | 
         endMs !== null && <p className="text-center text-base text-ink-3">{t.crew.handOverSoon(timeHM(endMs - 60 * 60_000))}</p>
       )}
       {error && <p className="rounded-xl bg-st-fault-bg p-3 text-lg text-st-fault-ink">{t.crew.sendError(error)}</p>}
+      {/* сводка смены файлом: после «Сдать смену» и в любой момент; на телефоне — PDF одним нажатием */}
+      <DownloadButton type="shift" formats={['pdf', 'docx', 'xlsx']} params={{ area, by }} label={v.close ? t.reports.shiftPdf : t.reports.shiftSummary} large />
     </div>
   );
 }

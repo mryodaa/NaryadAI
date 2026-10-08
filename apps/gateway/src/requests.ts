@@ -166,6 +166,11 @@ export class RequestDesk {
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   }
 
+  /** Для отчётов: все запросы прогона, по времени */
+  all(): CrewRequest[] {
+    return [...this.items.values()].map((i) => i.req).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  }
+
   /** Запрос по инциденту — последний */
   forIncident(incidentId: string): CrewRequest | undefined {
     return [...this.items.values()].map((i) => i.req).filter((r) => r.incidentId === incidentId).pop();

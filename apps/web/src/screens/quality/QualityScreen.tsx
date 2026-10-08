@@ -6,6 +6,7 @@ import { VIN_RE } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import type { QualityOverview } from '../../api/types';
 import { Card, WhyButton } from '../../components/ui';
+import { DownloadButton } from '../../components/DownloadButton';
 import { Modal } from '../../components/overlay';
 import { ExplainView } from '../../components/ExplainView';
 import { Booting } from '../../components/Booting';
@@ -32,7 +33,10 @@ export function QualityScreen() {
 
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.quality.title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.quality.title}</h1>
+        <DownloadButton type="quality" formats={['xlsx', 'pdf']} params={{ by: t.reports.managerRole }} label={t.reports.quality} />
+      </div>
 
       <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
         <Card className="p-4">

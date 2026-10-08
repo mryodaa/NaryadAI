@@ -7,6 +7,7 @@ import { MODEL_BY_ID, type BodyView } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import type { Passport } from '../../api/types';
 import { Modal } from '../../components/overlay';
+import { DownloadButton } from '../../components/DownloadButton';
 import { SourceBadge } from '../../components/SourceBadge';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { ENABLE_3D } from '../../lib/features';
@@ -62,8 +63,10 @@ export function PassportModal({ vin, onClose }: { vin: string | null; onClose: (
               </div>
             )}
           </div>
-          {canPath && (
-            <div className="flex flex-wrap gap-2 print:hidden">
+          <div className="flex flex-wrap items-start gap-2 print:hidden">
+            {vin && <DownloadButton type="vin" formats={['pdf', 'docx']} params={{ vin, by: t.reports.managerRole }} label={t.reports.passport} />}
+            {canPath && (
+              <>
               <button
                 type="button"
                 onClick={() => {
@@ -89,8 +92,9 @@ export function PassportModal({ vin, onClose }: { vin: string | null; onClose: (
                 <Play className="size-4" strokeWidth={2.25} aria-hidden />
                 {lang === 'kk' ? 'Жолды қайталау' : lang === 'en' ? 'Replay route' : 'Повторить путь'}
               </button>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
       }
     >

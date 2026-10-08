@@ -6,6 +6,7 @@ import { Check, ChevronDown, CircleCheck, Send } from 'lucide-react';
 import { api } from '../../api/client';
 import type { DecisionResponse, Incident, IncidentOption } from '../../api/types';
 import { Modal } from '../../components/overlay';
+import { DownloadButton } from '../../components/DownloadButton';
 import { SourceBadge } from '../../components/SourceBadge';
 import { ExplainView } from '../../components/ExplainView';
 import { Button, StatusChip } from '../../components/ui';
@@ -77,6 +78,7 @@ export function IncidentModal({ id, onClose }: { id: string | null; onClose: () 
               )}
             </div>
             <h2 className="text-[1.5rem] font-semibold leading-tight">{translateDynamicText(inc.title, lang)}</h2>
+            <DownloadButton type="incident" formats={['pdf', 'docx']} params={{ incidentId: inc.id, by: t.reports.managerRole }} label={t.reports.incident} className="self-start" />
           </div>
         ) : (
           '…'

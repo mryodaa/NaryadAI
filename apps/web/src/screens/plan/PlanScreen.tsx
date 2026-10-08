@@ -5,6 +5,7 @@ import { CircleCheck, Minus, Plus, TrendingDown } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Levers, MonthForecast } from '../../api/types';
 import { Card, WhyButton } from '../../components/ui';
+import { DownloadButton } from '../../components/DownloadButton';
 import { Modal } from '../../components/overlay';
 import { ExplainView } from '../../components/ExplainView';
 import { Booting } from '../../components/Booting';
@@ -41,7 +42,10 @@ export function PlanScreen() {
 
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.plan.title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.plan.title}</h1>
+        <DownloadButton type="plan" formats={['xlsx']} params={{ by: t.reports.managerRole }} label={t.reports.plan} />
+      </div>
 
       <Card className="@container flex flex-col gap-2 p-4">
         <div className="flex items-center justify-between gap-2">

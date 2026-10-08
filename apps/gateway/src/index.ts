@@ -28,6 +28,7 @@ import { ConnectionMonitor } from './connections';
 import { Crew } from './crew';
 import { RequestDesk } from './requests';
 import { crewRoutes } from './routes/crew';
+import { reportRoutes } from './routes/reports';
 import { registerAuth } from './auth';
 import type { Ctx } from './context';
 
@@ -151,6 +152,14 @@ demoRoutes(app, ctx);
 viewRoutes(app, ctx);
 plantRoutes(app, ctx);
 crewRoutes(app, ctx);
+reportRoutes(app, () => ({
+  twin: twin.twin,
+  crew,
+  now: clock.now(),
+  runStartMs: clock.runStartMs,
+  eventsByVin: (vin) => db.eventsByVin(vin),
+  forecast: () => twin.forecast(clock.now()),
+}));
 
 // Видео с постов: настоящий ролик — файл data/media/clips/<имя>.mp4; пока его нет — честная заглушка
 app.get<{ Params: { name: string } }>('/media/clips/:name', async (req, reply) => {
