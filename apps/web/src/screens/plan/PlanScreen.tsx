@@ -43,7 +43,7 @@ export function PlanScreen() {
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.plan.title}</h1>
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.plan.title}</h1>
         <DownloadButton type="plan" formats={['xlsx']} params={{ by: t.reports.managerRole }} label={t.reports.plan} />
       </div>
 
@@ -71,12 +71,12 @@ export function PlanScreen() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
+      <div className="grid grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] items-start gap-3 max-lg:grid-cols-1 xl:gap-4">
         <CumulativeChart f={g} hasLevers={anyLever} />
         <WhatIf f={f} g={g} levers={levers} setLevers={setLevers} />
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-3 max-lg:grid-cols-1 xl:gap-4">
         <Losses f={f} />
         <Models f={g} />
       </div>
@@ -292,7 +292,7 @@ function Losses({ f }: { f: MonthForecast }) {
 function Models({ f }: { f: MonthForecast }) {
   const { t, lang } = useTranslation();
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-3 gap-3 max-md:grid-cols-1">
       {f.models.map((m) => {
         const risky = m.stockRisk !== 'низкий';
         return (

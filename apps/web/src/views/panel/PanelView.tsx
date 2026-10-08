@@ -21,8 +21,10 @@ import type { Translations } from '../../i18n/types';
  * Колонки списка: участок · статус · выпуск · главный показатель · что происходит · стрелка раскрытия.
  * Минимумы подобраны под 1366: статус «Работает с браком» и причина вида «Камера-02: фильтр забит (346 Па)» не режутся.
  */
-const COLS =
+const GRID =
   'grid grid-cols-[minmax(11rem,0.9fr)_minmax(11rem,0.9fr)_minmax(6rem,0.5fr)_minmax(10rem,0.8fr)_minmax(0,1.6fr)_1rem] items-center gap-x-3';
+/** На телефоне — две колонки: участок и статус, ниже выпуск и показатель, «что происходит» — во всю ширину */
+const COLS = `${GRID} max-md:grid-cols-[minmax(0,1fr)_auto] max-md:gap-y-1 max-md:[&>*:nth-child(5)]:col-span-2 max-md:[&>*:nth-child(6)]:hidden max-md:[&>*:first-child]:break-words`;
 
 /** На 1366 строки чуть мельче, чтобы пять колонок вставали в одну строку */
 const ROW_TEXT = 'text-[0.9375rem] 2xl:text-base';
@@ -42,7 +44,7 @@ export function PanelView({ snapshot: s, onIncident }: { snapshot: LiveSnapshot;
   return (
     <div className="view-in flex flex-col gap-3 xl:gap-4">
       <Card className="overflow-hidden">
-        <div className={cx(COLS, 'border-b border-line px-3.5 py-2 text-sm font-semibold leading-tight text-ink-3')} aria-hidden>
+        <div className={cx(COLS, 'border-b border-line px-3.5 py-2 text-sm font-semibold leading-tight text-ink-3 max-md:hidden')} aria-hidden>
           <span>{t.panel.colArea}</span>
           <span>{t.panel.colStatus}</span>
           <span>{t.panel.colOutput(timeHM(s.now))}</span>
@@ -158,11 +160,11 @@ function BufferRow({ b }: { b: BufferView }) {
   const Flag = full ? CircleSlash : Hourglass;
   const bufferPrefix = lang === 'kk' ? 'буфер' : lang === 'en' ? 'buffer' : 'буфер';
   return (
-    <div className={cx(COLS, 'border-t border-line px-3.5 py-1 text-sm leading-tight')}>
+    <div className={cx(GRID, 'border-t border-line px-3.5 py-1 text-sm leading-tight max-md:grid-cols-[1rem_minmax(0,1fr)]')}>
       <span className="flex justify-end pr-1 text-ink-3" aria-hidden>
         <ArrowDown className="size-3.5" strokeWidth={2.25} />
       </span>
-      <span className="col-span-4 flex items-center gap-3 text-ink-2">
+      <span className="col-span-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-2 max-md:col-span-1">
         <span>
           {t.panel.inQueue(b.count, b.capacity)}
         </span>
@@ -179,7 +181,7 @@ function BufferRow({ b }: { b: BufferView }) {
           </span>
         )}
       </span>
-      <span />
+      <span className="max-md:hidden" />
     </div>
   );
 }

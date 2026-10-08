@@ -45,7 +45,7 @@ export function CrewInbox() {
       {open && (
         <>
           <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-40 cursor-default" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-11 z-50 flex max-h-[70vh] w-[26rem] flex-col gap-2 overflow-y-auto rounded-2xl bg-surface p-3 shadow-pop ring-1 ring-line">
+          <div className="absolute right-0 top-11 z-50 flex max-h-[70vh] w-[26rem] flex-col max-lg:fixed max-lg:inset-x-2 max-lg:top-16 max-lg:w-auto gap-2 overflow-y-auto rounded-2xl bg-surface p-3 shadow-pop ring-1 ring-line">
             {help.length > 0 && (
               <>
                 <h2 className="px-1 text-lg font-semibold">{t.crew.helpTitle}</h2>

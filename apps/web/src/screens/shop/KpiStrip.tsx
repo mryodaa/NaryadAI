@@ -11,8 +11,10 @@ type Kpi = LiveSnapshot['kpi'];
 
 export function KpiStrip({ kpi, now, onWhyPlan }: { kpi: Kpi; now: string; onWhyPlan?: () => void }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1.75fr)_repeat(3,minmax(0,1fr))] gap-3 xl:gap-4">
-      <MonthPlanTile plan={kpi.monthPlan} onWhy={onWhyPlan} />
+    <div className="grid grid-cols-[minmax(0,1.75fr)_repeat(3,minmax(0,1fr))] gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1 xl:gap-4">
+      <div className="grid max-lg:col-span-2 max-sm:col-span-1">
+        <MonthPlanTile plan={kpi.monthPlan} onWhy={onWhyPlan} />
+      </div>
       <ShiftOutputTile out={kpi.shiftOutput} now={now} />
       <OeeTile oee={kpi.oee} />
       <DefectsTile d={kpi.defects} />

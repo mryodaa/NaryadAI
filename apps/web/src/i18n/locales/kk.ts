@@ -9,6 +9,7 @@ export const kk: Translations = {
     equipment: 'Жабдықтар',
     sources: 'Дереккөздер',
     sourcesShort: 'Дереккөздер',
+    menu: 'Мәзір',
     digitalTwin: 'Сандық егіз',
     locationSubtitle: 'Allur · Қостанай',
     settingsTooltip: 'Болжамдар мен параметрлер',

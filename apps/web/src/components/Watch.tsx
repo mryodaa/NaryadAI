@@ -63,7 +63,7 @@ export function WatchBadge({ wide }: { wide: boolean }) {
         {wide ? t.watch.watching(ids.length) : t.watch.watchingShort(ids.length)}
       </button>
       {open && (
-        <div className="view-in absolute right-0 top-full z-50 mt-2 w-[30rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl bg-surface shadow-pop ring-1 ring-line">
+        <div className="view-in absolute right-0 top-full z-50 mt-2 w-[30rem] max-w-[calc(100vw-2rem)] overflow-hidden max-lg:fixed max-lg:inset-x-2 max-lg:top-16 max-lg:mt-0 max-lg:w-auto max-lg:max-w-none rounded-2xl bg-surface shadow-pop ring-1 ring-line">
           <h2 className="px-4 pb-1 pt-3 text-sm font-semibold uppercase tracking-wide text-ink-3">{t.watch.title}</h2>
           <ul className="pb-2">
             {ids.map((id) => {

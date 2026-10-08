@@ -72,7 +72,9 @@ function initial(): Pick<ViewState, 'mode' | 'notice'> {
   const gl = webglSupport();
   if (gl === 'none') return { mode: 'panel', notice: asked === 'panel' ? null : NO_3D_MESSAGE };
   if (asked) return { mode: asked, notice: null };
-  return { mode: gl === 'ok' ? '3d' : 'panel', notice: null };
+  // на телефоне и узком планшете по умолчанию «Панель»: плавающие окна 3D закрыли бы сцену; 3D — по переключателю
+  const roomy = typeof matchMedia === 'undefined' || matchMedia('(min-width: 1024px)').matches;
+  return { mode: gl === 'ok' && roomy ? '3d' : 'panel', notice: null };
 }
 
 export const useView = create<ViewState>(() => ({

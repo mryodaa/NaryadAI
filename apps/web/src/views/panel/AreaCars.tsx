@@ -92,7 +92,7 @@ function CarRow({ b, now, on, where }: { b: BodyView; now: number; on: boolean; 
       onClick={() => selectCar(b.bodyId)}
       aria-pressed={on}
       className={cx(
-        'grid w-full grid-cols-[auto_4.5rem_5.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 rounded-lg px-1.5 py-1 text-left text-[0.9375rem] focus-visible:outline-2 focus-visible:outline-accent',
+        'grid w-full grid-cols-[auto_4.5rem_5.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 max-sm:grid-cols-[auto_4.5rem_minmax(0,1fr)_auto] max-sm:[&>*:nth-child(4)]:col-span-3 max-sm:[&>*:nth-child(4)]:col-start-2 max-sm:[&>*:nth-child(4)]:row-start-2 rounded-lg px-1.5 py-1 text-left text-[0.9375rem] focus-visible:outline-2 focus-visible:outline-accent',
         on ? 'bg-accent-bg' : 'hover:bg-surface-2',
       )}
     >

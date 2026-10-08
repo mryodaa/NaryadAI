@@ -42,11 +42,11 @@ export function SourcesScreen() {
 
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.sources.title}</h1>
+      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.sources.title}</h1>
 
       <StageSwitch stage={stage} />
 
-      <div className="grid grid-cols-4 gap-3 xl:gap-4">
+      <div className="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1 xl:gap-4">
         {SOURCES.filter((s) => s.id !== 'import').map((def) => (
           <SourceCard key={def.id} id={def.id} status={statuses.find((x) => x.id === def.id)} now={now} lan={q.data?.lan ?? []} />
         ))}
@@ -54,7 +54,7 @@ export function SourcesScreen() {
 
       <UnconfirmedLine />
 
-      <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
+      <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] items-start gap-3 max-lg:grid-cols-1 xl:gap-4">
         <Feed />
         <div className="flex flex-col gap-3 xl:gap-4">
           <Contradictions items={q.data?.contradictions ?? []} />
@@ -62,7 +62,7 @@ export function SourcesScreen() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-3 max-lg:grid-cols-1 xl:gap-4">
         <Links />
         <Errors items={q.data?.validationErrors ?? []} />
       </div>
@@ -93,7 +93,7 @@ function StageSwitch({ stage }: { stage: Stage }) {
         <h2 className="text-[1.125rem] font-semibold">{t.sources.stageSwitchTitle}</h2>
         <span className="text-base text-ink-3">{t.sources.stageSwitchSubtitle}</span>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-3 max-md:grid-cols-1">
         {STAGES.map((s) => {
           const localizedStage = t.domain.stages[s.id];
           const name = localizedStage?.name ?? (s.id === 0 ? t.sources.stage0Title : s.name.replace(/^\+ /, '+ '));

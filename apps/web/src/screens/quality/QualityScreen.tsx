@@ -34,11 +34,11 @@ export function QualityScreen() {
   return (
     <main className="flex flex-col gap-3 px-4 pb-6 pt-3 xl:gap-4 xl:px-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.quality.title}</h1>
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.quality.title}</h1>
         <DownloadButton type="quality" formats={['xlsx', 'pdf']} params={{ by: t.reports.managerRole }} label={t.reports.quality} />
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
+      <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-start gap-3 max-lg:grid-cols-1 xl:gap-4">
         <Card className="p-4">
           <h2 className="mb-1 text-[1.125rem] font-semibold">{t.quality.chartTitle}</h2>
           <div className="h-64">
@@ -124,7 +124,7 @@ export function QualityScreen() {
               onChange={(e) => setVin(e.target.value)}
               placeholder={t.quality.passportInputPlaceholder}
               maxLength={17}
-              className="h-11 w-[20rem] rounded-xl border border-line-strong bg-surface pl-10 pr-3 font-mono text-base uppercase tracking-wide focus-visible:outline-2 focus-visible:outline-accent"
+              className="h-11 w-[20rem] max-w-full rounded-xl border border-line-strong bg-surface pl-10 pr-3 font-mono text-base uppercase tracking-wide focus-visible:outline-2 focus-visible:outline-accent"
             />
           </label>
           <button type="submit" disabled={!valid} className="h-11 rounded-xl bg-accent px-4 font-semibold text-white disabled:opacity-40">

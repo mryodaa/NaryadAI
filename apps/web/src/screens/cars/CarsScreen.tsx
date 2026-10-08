@@ -46,12 +46,15 @@ export function CarsScreen() {
   return (
     <main className="flex flex-col gap-3 px-4 pb-4 pt-3 xl:px-6">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.cars.title}</h1>
+        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.cars.title}</h1>
         <p className="text-base text-ink-2">
           {t.cars.subtitle(total)}
         </p>
       </div>
-      <div className="grid items-start gap-2.5" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0, 1fr))` }}>
+      <div
+        className="items-start gap-2.5 max-lg:-mx-4 max-lg:flex max-lg:snap-x max-lg:snap-mandatory max-lg:overflow-x-auto max-lg:px-4 max-lg:pb-2 lg:grid lg:[grid-template-columns:repeat(var(--cols),minmax(0,1fr))]"
+        style={{ '--cols': cols.length } as React.CSSProperties}
+      >
         {cols.map((c) => (
           <StageColumn key={c.id} c={c} selected={selected} onOpen={open} />
         ))}
@@ -68,7 +71,7 @@ function StageColumn({ c, selected, onOpen }: { c: Column; selected: string | nu
   const localizedStageName = translateArea(c.id, lang, 'name') || c.name;
 
   return (
-    <section aria-label={`${localizedStageName}: ${c.rows.length}`} className="flex min-w-0 flex-col rounded-2xl bg-surface shadow-card ring-1 ring-line">
+    <section aria-label={`${localizedStageName}: ${c.rows.length}`} className="flex min-w-0 flex-col rounded-2xl bg-surface shadow-card ring-1 ring-line max-lg:w-[17rem] max-lg:shrink-0 max-lg:snap-start">
       <header className="border-b border-line px-3 py-2">
         <div className="flex items-baseline justify-between gap-2">
           <h2 className="truncate text-lg font-semibold">{localizedStageName}</h2>

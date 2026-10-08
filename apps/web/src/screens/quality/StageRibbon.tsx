@@ -15,7 +15,10 @@ export function StageRibbon({ stages }: { stages: RibbonStage[] }) {
 
   return (
     <section aria-label={t.quality.stageRibbonTitle}>
-      <ol className="grid gap-2" style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}>
+      <ol
+        className="grid gap-2 [grid-template-columns:repeat(var(--cols),minmax(0,1fr))] max-md:overflow-x-auto max-md:pb-1 max-md:[grid-template-columns:repeat(var(--cols),7.5rem)]"
+        style={{ '--cols': stages.length } as React.CSSProperties}
+      >
         {stages.map((s) => (
           <li key={s.id} className="flex min-w-0 flex-col gap-1.5">
             <StageCard s={s} markText={markText} open={open === s.id} onToggle={() => setOpen(open === s.id ? null : s.id)} />

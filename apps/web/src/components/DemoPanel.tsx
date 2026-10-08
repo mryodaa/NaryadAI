@@ -58,7 +58,7 @@ export function DemoPanel() {
         </button>
       )}
       {open && (
-        <div className="fixed bottom-4 right-4 z-50 w-[23rem] rounded-2xl bg-ink p-4 text-white shadow-pop print:hidden">
+        <div className="fixed bottom-4 right-4 z-50 max-h-[calc(100dvh-2rem)] w-[23rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl bg-ink p-4 text-white shadow-pop print:hidden">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <div className="font-semibold">{t.demo.title}</div>

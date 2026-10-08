@@ -133,7 +133,7 @@ export function CarSearch({ wide = false }: { wide?: boolean }) {
         : t.search.notFound;
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className={cx('relative', open && 'max-lg:fixed max-lg:inset-x-0 max-lg:top-0 max-lg:z-50 max-lg:flex max-lg:h-14 max-lg:items-center max-lg:bg-surface max-lg:px-3')}>
       {!open ? (
         <button
           type="button"
@@ -144,10 +144,10 @@ export function CarSearch({ wide = false }: { wide?: boolean }) {
         >
           <Search className="size-[1.1rem]" strokeWidth={2.25} aria-hidden />
           {wide && <span>{t.search.buttonLabel}</span>}
-          <kbd className="rounded-md bg-surface-2 px-1.5 font-mono text-sm text-ink-3">/</kbd>
+          <kbd className="rounded-md bg-surface-2 px-1.5 font-mono text-sm text-ink-3 max-lg:hidden">/</kbd>
         </button>
       ) : (
-        <div className="flex h-9 w-[19rem] items-center gap-2 rounded-xl border border-accent bg-surface pl-2.5 pr-1 ring-2 ring-accent/25">
+        <div className="flex h-9 w-[19rem] items-center gap-2 rounded-xl border border-accent max-lg:h-10 max-lg:w-full bg-surface pl-2.5 pr-1 ring-2 ring-accent/25">
           <Search className="size-[1.1rem] shrink-0 text-ink-3" strokeWidth={2.25} aria-hidden />
           <input
             ref={inputRef}
@@ -173,7 +173,7 @@ export function CarSearch({ wide = false }: { wide?: boolean }) {
       </div>
 
       {open && (
-        <div className="view-in absolute right-0 top-full z-50 mt-2 w-[34rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl bg-surface shadow-pop ring-1 ring-line">
+        <div className="view-in absolute right-0 top-full z-50 mt-2 w-[34rem] max-w-[calc(100vw-2rem)] overflow-hidden max-lg:inset-x-2 max-lg:mt-0 max-lg:w-auto max-lg:max-w-none rounded-2xl bg-surface shadow-pop ring-1 ring-line">
           {!q ? (
             recent.length ? (
               <ul id={listId} role="listbox" aria-label={t.search.recentSearches} className="py-1.5">

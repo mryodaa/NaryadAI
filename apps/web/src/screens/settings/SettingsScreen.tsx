@@ -30,8 +30,8 @@ export function SettingsScreen() {
   const d = q.data;
   return (
     <main className="flex flex-col gap-4 px-4 pb-6 pt-3 xl:px-6">
-      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.settings.title}</h1>
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4">
+      <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.settings.title}</h1>
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4 max-lg:grid-cols-1">
         <div className="flex flex-col gap-4">
           <SpeedCard />
           <Card className="p-4">
@@ -46,7 +46,7 @@ export function SettingsScreen() {
                 }}
               >
                 {Object.keys(d.money).map((k) => (
-                  <label key={k} className="grid grid-cols-[minmax(0,1fr)_11rem] items-center gap-3">
+                  <label key={k} className="grid grid-cols-[minmax(0,1fr)_11rem] items-center gap-3 max-sm:grid-cols-[minmax(0,1fr)_8rem]">
                     <span className="leading-snug">{translateDynamicText(d.labels[k], lang)}</span>
                     <span className="flex items-center gap-1.5">
                       <input

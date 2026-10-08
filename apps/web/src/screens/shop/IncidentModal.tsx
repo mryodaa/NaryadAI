@@ -131,7 +131,10 @@ export function IncidentModal({ id, onClose }: { id: string | null; onClose: () 
                 )}
               </div>
             ) : (
-              <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(3, inc.options.length)}, minmax(0, 1fr))` }}>
+              <div
+                className="grid gap-3 [grid-template-columns:repeat(var(--cols),minmax(0,1fr))] max-md:grid-cols-1"
+                style={{ '--cols': Math.min(3, inc.options.length) } as React.CSSProperties}
+              >
                 {inc.options.map((o) => (
                   <OptionCard
                     key={o.id}

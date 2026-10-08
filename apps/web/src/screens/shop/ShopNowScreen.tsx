@@ -22,6 +22,7 @@ import { ViewSwitch } from '../../components/ViewSwitch';
 import { ENABLE_3D } from '../../lib/features';
 import { closeAreaPanel, closeIncident, openAreaPanel, openIncident, useView } from '../../state/view';
 import { cx } from '../../lib/tones';
+import { useMinWidth } from '../../lib/media';
 import { timeHM } from '../../lib/format';
 import { useTranslation } from '../../i18n/store';
 import { translateDynamicText } from '../../i18n/translator';
@@ -43,6 +44,7 @@ export function ShopNowScreen({ snapshot }: { snapshot: LiveSnapshot }) {
   }, [car]);
   const lift = !!car && !kpiWithCar;
   useViewControls();
+  const narrow = !useMinWidth(1024);
 
   const showIncident = (id: string) => {
     setAll(false);
@@ -51,35 +53,35 @@ export function ShopNowScreen({ snapshot }: { snapshot: LiveSnapshot }) {
   const noShift = !s.shift && s.nextShiftStartsAt ? t.shop.noActiveShiftWithNext(timeHM(s.nextShiftStartsAt)) : null;
 
   return (
-    <main className={cx('relative', is3d ? 'h-[calc(100dvh-3.5rem)] overflow-hidden' : 'flex flex-col gap-3 px-4 pb-4 pt-3 xl:gap-4 xl:px-6')}>
+    <main className={cx('relative', is3d ? 'h-[calc(100dvh-3.5rem)] overflow-hidden' : 'flex flex-col gap-3 px-3 pb-4 pt-3 sm:px-4 xl:gap-4 xl:px-6')}>
       {/* слой 3D всегда в одном месте дерева: при переключении режима сцена не пересоздаётся */}
       {ENABLE_3D && <Scene3DLayer />}
 
       {is3d ? (
         <div className="pointer-events-none absolute inset-0 z-20 flex flex-col gap-3 px-4 pb-16 pt-3 xl:gap-4 xl:px-6">
-          <div data-occluder="top" className="pointer-events-auto flex items-center gap-4 self-start rounded-2xl bg-page/90 py-1 pl-1 pr-3">
-            <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.shop.title}</h1>
+          <div data-occluder="top" className="pointer-events-auto flex items-center gap-4 self-start rounded-2xl bg-page/90 py-1 pl-1 pr-3 max-lg:flex-wrap max-lg:gap-2">
+            <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.shop.title}</h1>
             <ViewSwitch />
             {noShift && <p className="text-base text-ink-2">{noShift}</p>}
           </div>
           <div data-occluder="top" className="pointer-events-auto">
-            <FloatingKpi kpi={s.kpi} now={s.now} onWhyPlan={() => setWhyPlan(true)} compact={!!car} compactOpen={kpiWithCar} onCompactOpen={setKpiWithCar} />
+            <FloatingKpi kpi={s.kpi} now={s.now} onWhyPlan={() => setWhyPlan(true)} compact={!!car || narrow} compactOpen={kpiWithCar} onCompactOpen={setKpiWithCar} />
           </div>
           <div className={cx('flex min-h-0 flex-1 justify-end', lift && 'absolute inset-x-4 bottom-16 top-3 xl:inset-x-6')}>
             <div
               data-occluder="right"
-              className={cx('pointer-events-auto flex max-h-full min-h-0 flex-col gap-3 self-start', panelArea || car ? 'w-[27rem] 2xl:w-[30rem]' : 'w-[19.5rem] 2xl:w-[22rem]')}
+              className={cx('pointer-events-auto flex max-h-full min-h-0 flex-col gap-3 self-start', panelArea || car ? 'w-[27rem] 2xl:w-[30rem]' : 'w-[19.5rem] 2xl:w-[22rem]', 'max-lg:w-full')}
             >
-              <FloatingAttention items={s.attention} total={s.attentionTotal} onOpen={showIncident} onMore={() => setAll(true)} compact={!!panelArea || !!car} />
+              <FloatingAttention items={s.attention} total={s.attentionTotal} onOpen={showIncident} onMore={() => setAll(true)} compact={!!panelArea || !!car || narrow} />
               {car ? <CarCard bodyId={car} floating /> : <AreaPanel area={panelArea} floating highlight={equipment} onClose={closeAreaPanel} onIncident={showIncident} />}
             </div>
           </div>
         </div>
       ) : (
         <>
-          <div className={cx('flex justify-between gap-4', ENABLE_3D ? 'items-center' : 'items-baseline')}>
-            <div className="flex min-w-0 items-center gap-4">
-              <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">{t.shop.title}</h1>
+          <div className={cx('flex flex-wrap justify-between gap-x-4 gap-y-2', ENABLE_3D ? 'items-center' : 'items-baseline')}>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+              <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight max-sm:text-[1.375rem]">{t.shop.title}</h1>
               {ENABLE_3D && <ViewSwitch />}
             </div>
             {s.dataNote ? <p className="text-base text-ink-2">{translateDynamicText(s.dataNote, lang)}</p> : noShift && <p className="text-base text-ink-2">{noShift}</p>}
@@ -88,7 +90,7 @@ export function ShopNowScreen({ snapshot }: { snapshot: LiveSnapshot }) {
           <KpiStrip kpi={s.kpi} now={s.now} onWhyPlan={() => setWhyPlan(true)} />
           <FollowBar className="self-start" />
 
-          <div className="grid grid-cols-[minmax(0,1fr)_19.5rem] items-start gap-3 xl:gap-4 2xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="grid grid-cols-[minmax(0,1fr)_19.5rem] items-start gap-3 max-lg:grid-cols-1 xl:gap-4 2xl:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="flex min-w-0 flex-col gap-3 xl:gap-4">
               {ENABLE_3D ? (
                 <ShopCenter snapshot={s} onIncident={showIncident} />

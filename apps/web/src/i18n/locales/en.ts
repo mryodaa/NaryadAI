@@ -9,6 +9,7 @@ export const en: Translations = {
     equipment: 'Equipment',
     sources: 'Data Sources',
     sourcesShort: 'Sources',
+    menu: 'Menu',
     digitalTwin: 'Digital Twin',
     locationSubtitle: 'Allur · Kostanay',
     settingsTooltip: 'Assumptions & Settings',

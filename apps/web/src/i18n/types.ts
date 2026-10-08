@@ -9,6 +9,8 @@ export interface Translations {
     equipment: string;
     sources: string;
     sourcesShort: string;
+    /** Кнопка меню в шапке на узком экране */
+    menu: string;
     digitalTwin: string;
     locationSubtitle: string;
     settingsTooltip: string;

@@ -30,13 +30,19 @@ export function ShiftTimeline({
 
   return (
     <Card className="px-4 pb-3 pt-3">
-      <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+      <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 max-sm:grid-cols-[4.5rem_minmax(0,1fr)]">
         <div className="text-base font-semibold leading-tight">{t.shop.timelineTitle}</div>
         <div className="relative h-5 text-sm text-ink-3">
           {hours.map((h, i) => (
             <span
               key={h}
-              className={cx('num absolute top-0', i === 0 ? '' : i === hours.length - 1 ? '-translate-x-full' : '-translate-x-1/2')}
+              className={cx(
+                'num absolute top-0',
+                i === 0 ? '' : i === hours.length - 1 ? '-translate-x-full' : '-translate-x-1/2',
+                // на узком экране подписи не помещаются каждый час: на планшете — через час, на телефоне — через три
+                i !== hours.length - 1 && i % 2 !== 0 && 'max-lg:hidden',
+                i !== hours.length - 1 && i % 4 !== 0 && 'max-sm:hidden',
+              )}
               style={{ left: pos(h) }}
             >
               {timeHM(h)}

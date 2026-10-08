@@ -23,7 +23,7 @@ export function AreaDetails({ area, shiftRunning }: { area: AreaId; shiftRunning
   const d = q.data;
   return (
     // колонка графика — в пикселях: при печати шрифт мельче, а SVG графика нарисован под экранную ширину
-    <div className="grid grid-cols-[minmax(0,1fr)_240px] items-start gap-x-5 gap-y-3 border-t border-line bg-surface px-3.5 pb-3 pt-2.5 2xl:grid-cols-[minmax(0,1fr)_300px]">
+    <div className="grid grid-cols-[minmax(0,1fr)_240px] max-md:grid-cols-1 items-start gap-x-5 gap-y-3 border-t border-line bg-surface px-3.5 pb-3 pt-2.5 2xl:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0">
         {!d ? (
           <p className="py-2 text-ink-2">

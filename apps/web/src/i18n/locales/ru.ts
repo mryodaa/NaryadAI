@@ -9,6 +9,7 @@ export const ru: Translations = {
     equipment: 'Оборудование',
     sources: 'Источники данных',
     sourcesShort: 'Источники',
+    menu: 'Меню',
     digitalTwin: 'Цифровой двойник',
     locationSubtitle: 'Allur · Костанай',
     settingsTooltip: 'Допущения и параметры',
