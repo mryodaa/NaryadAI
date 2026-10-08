@@ -7,5 +7,5 @@ export { evaluateArea, bufferCounts, type AreaEval, type Signal } from './status
 export { shiftKpis, stopIntervals, criticalDowntimeToday, unaccountedLosses } from './kpi';
 export { monthForecast, NO_LEVERS, type Levers, type MonthForecast, type LossItem, type LeverInfo } from './forecast';
 export { paintFilterCause, filterForecast, qualityWindow } from './quality';
-export { IncidentBook, projectedStopLoss, robotCycles, type Incident, type IncidentOption } from './incidents';
+export { IncidentBook, projectedStopLoss, robotCycles, checkable, stopKey, type Incident, type IncidentOption, type Verdict } from './incidents';
 export { dataChecks, type DataCheck } from './checks';

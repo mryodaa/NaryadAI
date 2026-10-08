@@ -77,6 +77,9 @@ export interface Incident {
   explain: Explain;
   signals: { source: SourceId | 'twin'; ts: number; text: string; clipUrl?: string }[];
   decision: { optionId: string; decidedAt: number; decidedBy?: string; workOrderId: string; title: string } | null;
+  /** Проверка на месте: сигнал одного источника, совпали два, подтвердил человек, не подтвердил */
+  check?: 'signal' | 'probable' | 'confirmed' | 'rejected';
+  checkSources?: SourceId[];
 }
 
 export interface DecisionResponse {

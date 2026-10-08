@@ -17,6 +17,6 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   });
   const text = await r.text();
   const body = text ? (JSON.parse(text) as unknown) : null;
-  if (!r.ok) throw new ApiError((body as { message?: string } | null)?.message ?? `Ошибка ${r.status}`, r.status);
+  if (!r.ok) throw new ApiError((body as { message?: string } | null)?.message ?? `HTTP ${r.status}`, r.status);
   return body as T;
 }

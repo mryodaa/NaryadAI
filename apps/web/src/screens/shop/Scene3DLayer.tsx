@@ -6,6 +6,7 @@ import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { fallbackToPanel, useView } from '../../state/view';
 import { loadPlant3D } from '../../views/plant3d/load';
 import { cx } from '../../lib/tones';
+import { useTranslation } from '../../i18n/store';
 
 const Plant3DView = lazy(loadPlant3D);
 
@@ -46,12 +47,14 @@ export function Scene3DLayer() {
   );
 }
 
+
 function SceneLoading() {
+  const { t } = useTranslation();
   return (
     <div className="absolute inset-0 grid place-items-center bg-page">
       <div className="flex items-center gap-2 text-lg text-ink-2">
         <LoaderCircle className="size-6 animate-spin text-accent" aria-hidden />
-        Загружаю 3D-модель цеха…
+        {t.views.loading3d}
       </div>
     </div>
   );

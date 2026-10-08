@@ -14,6 +14,7 @@ import {
   type AreaId,
   type AreaView,
   type AttentionItem,
+  type DismissedItem,
   type BufferId,
   type CanonicalEvent,
   type LiveSnapshot,
@@ -26,7 +27,7 @@ import {
   type WorkOrder,
 } from '@allur/contracts';
 import { DEFAULT_CONFIG, type MoneyParams, type TwinConfig } from './config';
-import { IncidentBook, robotCycles, type Incident } from './incidents';
+import { IncidentBook, checkable, robotCycles, stopKey, type Incident, type Verdict } from './incidents';
 import { monthForecast, NO_LEVERS, type Levers, type MonthForecast } from './forecast';
 import { criticalDowntimeToday, shiftKpis, stopIntervals, unaccountedLosses } from './kpi';
 import { paintFilterCause, qualityAlarm, qualityWindow } from './quality';
@@ -146,6 +147,29 @@ export class Twin {
     }
     for (const stage of this.plant.production) this.evals[stage.id] = evaluateArea(st, stage.id, now, this.cfg, qualityReasons[stage.id] ?? null);
 
+    // Мастер на месте не подтвердил остановку: пока длится то же отклонение, участок не красим и инцидент не открываем
+    const rejected = this.book.rejectedKeys();
+    if (rejected.size) {
+      const live = new Set<string>();
+      for (const stage of this.plant.production) {
+        const key = stopKey(stage.id, this.evals[stage.id], now);
+        if (!key) continue;
+        live.add(key);
+        if (!rejected.has(key)) continue;
+        const q = qualityReasons[stage.id];
+        this.evals[stage.id] = {
+          area: stage.id,
+          status: q ? 'degraded_quality' : 'running',
+          reason: q?.text ?? null,
+          since: q?.since ?? null,
+          signals: q?.signals ?? [],
+          rule: 'Мастер на месте не подтвердил сигнал об остановке — участок считаем работающим',
+          causeEquipment: q?.equipmentId,
+        };
+      }
+      for (const k of rejected) if (k.startsWith('stop:') && !live.has(k)) this.book.dropVerdict(k);
+    }
+
     if (now - this.lastSample >= 2 * 60_000 || now < this.lastSample) {
       this.lastSample = now;
       this.bufferSamples.push({ t: now, counts: bufferCounts(st) });
@@ -182,11 +206,21 @@ export class Twin {
     return f;
   }
 
+  /** Открытые инциденты; непроверенные сигналы — после проверенных, снятые мастером — не показываем */
   incidents(): Incident[] {
+    const rank = (i: Incident) => (i.check === 'signal' ? 1 : 0);
     return this.book
       .all()
-      .filter((i) => i.status !== 'resolved')
-      .sort((a, b) => (a.status === b.status ? b.impactCars - a.impactCars : a.status === 'open' ? -1 : 1));
+      .filter((i) => i.status !== 'resolved' && i.check !== 'rejected')
+      .sort((a, b) => rank(a) - rank(b) || (a.status === b.status ? b.impactCars - a.impactCars : a.status === 'open' ? -1 : 1));
+  }
+
+  /** Мастер на месте ответил на сигнал (ключ инцидента) */
+  setVerdict(key: string, v: Verdict) {
+    this.book.setVerdict(key, v);
+    // ответ сразу виден на экране: статусы и инциденты пересчитываем на следующем тике
+    this.lastIncidentUpdate = 0;
+    this.forecastCache.clear();
   }
 
   incident(id: string): Incident | undefined {
@@ -215,6 +249,7 @@ export class Twin {
     const kpis = shiftKpis(st, now, cfg, shift);
     const f = this.forecast(now);
     const counts = bufferCounts(st);
+    const open = this.incidents();
 
     const stock = KITS.map((k) => st.stock.get(k.id)).filter((s): s is NonNullable<typeof s> => !!s);
     const worst = stock.length ? stock.reduce((a, b) => (a.shiftsLeft < b.shiftsLeft ? a : b)) : null;
@@ -244,11 +279,11 @@ export class Twin {
         done: kpis.areaDone[stage.id] ?? 0,
         planToNow: kpis.planToNow,
         reason: ev?.reason ?? null,
+        check: ev && ev.status !== 'running' && ev.status !== 'idle' ? areaCheck(open, stage.id) : undefined,
       };
     });
     void minShifts;
 
-    const open = this.incidents();
     const attention: AttentionItem[] = open.slice(0, 3).map((i) => ({
       incidentId: i.id,
       tone: i.tone,
@@ -257,7 +292,15 @@ export class Twin {
       area: i.area,
       openedAt: toPlantIso(i.openedAt),
       fresh: i.status === 'open' && now - i.openedAt < 20 * 60_000,
+      check: i.check,
+      sources: i.checkSources,
     }));
+    const dismissed: DismissedItem[] = this.book
+      .all()
+      .filter((i) => i.check === 'rejected' && i.verdict && now - i.verdict.at < 20 * 60_000 && i.verdict.at <= now)
+      .sort((a, b) => b.verdict!.at - a.verdict!.at)
+      .slice(0, 3)
+      .map((i) => ({ incidentId: i.id, title: i.title, area: i.area, reason: i.verdict!.reason ?? null, at: toPlantIso(i.verdict!.at) }));
 
     // Лента смены: остановки по участкам и моменты инцидентов
     const segments: TimelineSegment[] = [];
@@ -329,6 +372,7 @@ export class Twin {
       buffers: this.plant.buffers.map((b) => ({ id: b.id, count: Math.min(counts[b.id] ?? 0, b.capacity), capacity: b.capacity })),
       attention,
       attentionTotal: open.length,
+      dismissed,
       timeline: { segments, marks },
       dataNote: st.plcConnected(now) ? null : 'Данные с контроллеров не подключены — двойник оценивает состояние по 1С:MES',
     };
@@ -563,6 +607,13 @@ export class Twin {
       unaccounted: unaccountedLosses(st, now, dayStart),
     };
   }
+}
+
+/** Отклонение участка подтверждено только сигналами: signal — одним источником, probable — двумя */
+function areaCheck(open: Incident[], area: AreaId): 'signal' | 'probable' | undefined {
+  const mine = open.filter((i) => i.area === area && checkable(i));
+  if (!mine.length || mine.some((i) => i.check === 'confirmed' || i.decision)) return undefined;
+  return mine.every((i) => i.check === 'signal') ? 'signal' : 'probable';
 }
 
 function lowerFirst(s: string | null | undefined): string {

@@ -9,7 +9,7 @@ import { useTranslation } from '../../i18n/store';
 import { translateDynamicText } from '../../i18n/translator';
 
 export function IncidentList({ open, onClose, onOpen }: { open: boolean; onClose: () => void; onOpen: (id: string) => void }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const q = useQuery({ queryKey: ['incidents'], queryFn: () => api<Incident[]>('/api/v1/incidents'), enabled: open, refetchInterval: 4000 });
   return (
     <Modal open={open} onClose={onClose} title={<h2 className="text-[1.375rem] font-semibold">{t.incident.allOpenIncidents}</h2>}>
@@ -21,8 +21,8 @@ export function IncidentList({ open, onClose, onOpen }: { open: boolean; onClose
               <button type="button" onClick={() => onOpen(i.id)} className="flex w-full items-center gap-3 rounded-xl bg-surface px-3 py-2.5 text-left shadow-card hover:bg-surface-2">
                 <Icon className={cx('size-5 shrink-0', TONE_CLASS[i.tone].ink)} />
                 <span className="flex-1">
-                  <span className="block font-semibold">{translateDynamicText(i.title)}</span>
-                  <span className="block text-ink-2">{translateDynamicText(i.impactText)}</span>
+                  <span className="block font-semibold">{translateDynamicText(i.title, lang)}</span>
+                  <span className="block text-ink-2">{translateDynamicText(i.impactText, lang)}</span>
                 </span>
                 <span className="num text-sm text-ink-3">{t.incident.sinceTime(timeHM(i.openedAt))}</span>
                 <ArrowRight className="size-4 text-accent-ink" />

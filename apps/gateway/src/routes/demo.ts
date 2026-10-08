@@ -1,6 +1,6 @@
 // Пульт демонстрации: скорость, пауза, сброс, сценарии, ступень внедрения.
 import type { FastifyInstance } from 'fastify';
-import { SCENARIOS, SCENARIO_IDS, SPEEDS, STAGES, type ScenarioId, type Stage } from '@allur/contracts';
+import { SCENARIOS, SCENARIO_IDS, SPEEDS, STAGES, topics, type ScenarioId, type Stage } from '@allur/contracts';
 import type { Ctx } from '../context';
 
 export function demoState(ctx: Ctx) {
@@ -59,6 +59,18 @@ export function demoRoutes(app: FastifyInstance, ctx: Ctx) {
     const b = (req.body ?? {}) as { on?: boolean };
     ctx.clock.setSimulateAll(b.on === true);
     return demoState(ctx);
+  });
+
+  /** Пульт: имитатор устраивает событие для показа рабочего места мастера */
+  app.post('/api/v1/demo/inject', async (req, reply) => {
+    const b = (req.body ?? {}) as { kind?: string };
+    if (b.kind !== 'false_signal' && b.kind !== 'booth_stop') {
+      return reply.code(400).send({ error: 'validation_failed', message: 'Событие: false_signal или booth_stop' });
+    }
+    const broker = ctx.mqtt();
+    if (!broker) return reply.code(503).send({ error: 'unavailable', message: 'MQTT ещё не запущен' });
+    broker.publish(topics.simCommand, { kind: b.kind }, { qos: 1 });
+    return { ok: true };
   });
 
   app.post('/api/v1/demo/stage', async (req, reply) => {

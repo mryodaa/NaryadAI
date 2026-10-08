@@ -122,13 +122,13 @@ export function PassportModal({ vin, onClose }: { vin: string | null; onClose: (
                   <span className="absolute -left-[1.95rem] top-1.5 size-3 rounded-full bg-st-neutral ring-4 ring-page" />
                   <div className="flex flex-wrap items-baseline gap-x-3">
                     <span className="num w-12 shrink-0 text-ink-3">{timeHM(tItem.at, lang)}</span>
-                    <span className="font-semibold">{tItem.step.postName}</span>
+                    <span className="font-semibold">{translateDynamicText(tItem.step.postName, lang)}</span>
                   </div>
                   {tItem.step.conditions.map((c, k) => (
                     <div key={k} className="ml-[3.75rem] mt-0.5 flex items-center gap-2 text-base">
                       <SourceBadge source={c.source} compact />
-                      <span className="text-ink-2">{c.label}:</span>
-                      <span className={cx('font-semibold', c.tone !== 'neutral' && TONE_CLASS[c.tone].ink)}>{c.value}</span>
+                      <span className="text-ink-2">{translateDynamicText(c.label, lang)}:</span>
+                      <span className={cx('font-semibold', c.tone !== 'neutral' && TONE_CLASS[c.tone].ink)}>{translateDynamicText(c.value, lang)}</span>
                     </div>
                   ))}
                 </li>
@@ -137,7 +137,7 @@ export function PassportModal({ vin, onClose }: { vin: string | null; onClose: (
                   <span className="absolute -left-[2.05rem] top-1 size-4 rounded-full bg-st-attention ring-4 ring-page" />
                   <div className="ml-[3.75rem] rounded-xl bg-st-attention-bg px-3 py-2">
                     <div className="flex items-center gap-2 font-semibold text-st-attention-ink">
-                      <SourceBadge source={tItem.check.source} compact /> {tItem.check.checkpoint}: {translateDynamicText(tItem.check.defect, lang).toLowerCase()}
+                      <SourceBadge source={tItem.check.source} compact /> {translateDynamicText(tItem.check.checkpoint, lang)}: {translateDynamicText(tItem.check.defect, lang).toLowerCase()}
                     </div>
                     <div className="text-base text-ink-2">
                       {t.quality.decisionLabel(translateDynamicText(tItem.check.decision, lang))} · {dateTime(tItem.at, lang)}

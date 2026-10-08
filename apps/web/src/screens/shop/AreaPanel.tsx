@@ -13,7 +13,7 @@ import { StatusChip } from '../../components/ui';
 import { AREA_STATUS, EQUIPMENT_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num, num1, pct0, timeHM } from '../../lib/format';
 import { useTranslation } from '../../i18n/store';
-import { translateAreaName, translateEquipmentName, translateDynamicText, translateStatus } from '../../i18n/translator';
+import { translateArea, translateAreaName, translateEquipmentName, translateDynamicText, translateStatus } from '../../i18n/translator';
 
 export function AreaPanel({
   area,
@@ -28,7 +28,7 @@ export function AreaPanel({
   floating?: boolean;
   highlight?: string | null;
 }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const q = useQuery({
     queryKey: ['area', area],
     queryFn: () => api<AreaDetail>(`/api/v1/areas/${area}`),
@@ -37,8 +37,8 @@ export function AreaPanel({
   });
   const d = q.data;
   const meta = d ? AREA_STATUS[d.status] : null;
-  const areaName = d ? translateAreaName(d.name) : '…';
-  const statusLabel = meta ? translateStatus(meta.label) : '';
+  const areaName = d ? (translateArea(d.area, lang, 'name') || translateAreaName(d.name, lang)) : '…';
+  const statusLabel = meta ? translateStatus(meta.label, lang) : '';
   const title = (
     <div className="flex flex-col gap-1.5">
       <div className="text-[1.375rem] font-semibold leading-tight">{areaName}</div>
@@ -103,14 +103,14 @@ export function FloatingWindow({
 }
 
 function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id: string) => void; highlight: string | null }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const lit = useRef<HTMLLIElement>(null);
   useEffect(() => {
     lit.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [highlight]);
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-lg leading-snug">{translateDynamicText(d.summary)}</p>
+      <p className="text-lg leading-snug">{translateDynamicText(d.summary, lang)}</p>
 
       {d.signals.length > 0 && (
         <section>
@@ -119,8 +119,8 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
             {d.signals.map((s, i) => (
               <li key={i} className="flex items-start gap-2.5 rounded-xl bg-surface px-3 py-2 shadow-card">
                 <SourceBadge source={s.source} compact />
-                <span className="flex-1 leading-snug">{translateDynamicText(s.text)}</span>
-                <span className="num shrink-0 text-sm text-ink-3">{timeHM(s.ts)}</span>
+                <span className="flex-1 leading-snug">{translateDynamicText(s.text, lang)}</span>
+                <span className="num shrink-0 text-sm text-ink-3">{timeHM(s.ts, lang)}</span>
               </li>
             ))}
           </ul>
@@ -136,7 +136,7 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
             </span>
             <span className="flex flex-col leading-tight">
               <span className="font-semibold">{t.shop.postVideo}</span>
-              <span className="text-sm text-white/70">{t.shop.stationCamera(timeHM(d.clip.at))}</span>
+              <span className="text-sm text-white/70">{t.shop.stationCamera(timeHM(d.clip.at, lang))}</span>
             </span>
             <Video className="ml-auto size-5 text-white/60" />
           </a>
@@ -151,7 +151,7 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
               const low = s.shiftsLeft !== null && s.shiftsLeft < 2;
               return (
                 <li key={s.kitId} className="flex items-center justify-between gap-3 px-3 py-2">
-                  <span>{s.name}</span>
+                  <span>{translateDynamicText(s.name, lang)}</span>
                   <span className={cx('num font-semibold', low && 'text-st-attention-ink')}>{s.shiftsLeft === null ? '—' : t.shop.shiftsRemaining(num1(s.shiftsLeft))}</span>
                 </li>
               );
@@ -167,14 +167,15 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
             {d.equipment.map((e) => {
               const st = e.status ? EQUIPMENT_STATUS[e.status] : null;
               const on = e.id === highlight;
+              const codePrefix = lang === 'kk' ? 'код:' : lang === 'en' ? 'code:' : 'код';
               return (
                 <li key={e.id} ref={on ? lit : undefined} className={cx('flex flex-col gap-1.5 px-3 py-2.5', on && 'rounded-xl bg-accent-bg ring-2 ring-accent')}>
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium">{translateEquipmentName(e.name)}</span>
+                    <span className="font-medium">{translateEquipmentName(e.name, lang)}</span>
                     {st ? (
                       <span className={cx('text-sm font-semibold', st.tone === 'neutral' ? 'text-ink-3' : TONE_CLASS[st.tone].ink)}>
-                        {translateStatus(st.label)}
-                        {e.code ? ` · код ${e.code}` : ''}
+                        {translateStatus(st.label, lang)}
+                        {e.code ? ` · ${codePrefix} ${e.code}` : ''}
                       </span>
                     ) : (
                       <span className="text-sm text-ink-3">{t.shop.noPlcData}</span>
@@ -233,9 +234,9 @@ function AreaBody({ d, onIncident, highlight }: { d: AreaDetail; onIncident: (id
             {d.incidents.map((i) => (
               <li key={i.id}>
                 <button type="button" onClick={() => onIncident(i.id)} className="flex w-full items-center justify-between gap-3 rounded-xl bg-surface px-3 py-2 text-left shadow-card hover:bg-surface-2">
-                  <span>{translateDynamicText(i.title)}</span>
+                  <span>{translateDynamicText(i.title, lang)}</span>
                   <span className="num shrink-0 text-sm text-ink-3">
-                    {timeHM(i.openedAt)} · {i.status === 'resolved' ? t.shop.statusResolved : i.status === 'decided' ? t.shop.statusDecided : t.shop.statusOpen}
+                    {timeHM(i.openedAt, lang)} · {i.status === 'resolved' ? t.shop.statusResolved : i.status === 'decided' ? t.shop.statusDecided : t.shop.statusOpen}
                   </span>
                 </button>
               </li>

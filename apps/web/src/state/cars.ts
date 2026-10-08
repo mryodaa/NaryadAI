@@ -50,7 +50,7 @@ export interface CarWhere {
 }
 
 import { getI18n } from '../i18n/store';
-import { translateAreaName, translateEquipmentName } from '../i18n/translator';
+import { translateAreaName, translateDynamicText, translateEquipmentName } from '../i18n/translator';
 
 export function carWhere(v: BodyView, plant: PlantModel, now: number, lang = getI18n().lang): CarWhere {
   const stage = plant.stageById.get(v.loc.stageId);
@@ -90,7 +90,8 @@ export function carWhere(v: BodyView, plant: PlantModel, now: number, lang = get
   const eq = loc.equipmentId ? plant.equipmentById.get(loc.equipmentId) : undefined;
   const eqName = eq?.name ? translateEquipmentName(eq.name, lang) : loc.equipmentId;
   const station = eq?.stationId && stage && stage.stations.length > 1 ? stage.stations.find((s) => s.id === eq.stationId)?.name : undefined;
-  return { title: [short, station, eqName].filter(Boolean).join(' · '), detail: time, tone };
+  const stationName = station ? translateDynamicText(station, lang) : undefined;
+  return { title: [short, stationName, eqName].filter(Boolean).join(' · '), detail: time, tone };
 }
 
 // ---------------------------------------------------------------------------

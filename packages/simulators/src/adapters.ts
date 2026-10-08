@@ -6,6 +6,7 @@ import {
   ID_METHOD_DEF,
   SEED_MODEL,
   plantOperations,
+  shiftAt,
   topics,
   toPlantIso,
   type AreaId,
@@ -72,6 +73,15 @@ export class Adapters {
   private lastScan = new Map<string, number>();
   /** Кузова с нанесённым VIN: после этого 1С и контроллеры отмечают их и по VIN */
   private vinShown = new Set<string>();
+  /**
+   * Ложные сигналы: данные ошиблись, а цех работает. На ступени 1+ контроллер робота на несколько минут
+   * шлёт «авария» (сбой датчика), на ступени 0 сканер 1С:MES участка отдаёт отметки с опозданием.
+   */
+  falseSignals = false;
+  private fsRng: Rng;
+  private nextFalseAt: number | null = null;
+  private glitch: { equipmentId: string; area: AreaId; until: number; real: { status: string; code?: string; text?: string } } | null = null;
+  private mesHold: { area: AreaId; until: number } | null = null;
 
   constructor(
     private runId: number,
@@ -83,6 +93,7 @@ export class Adapters {
   ) {
     this.delays = new Rng(seed ^ 0x5bd1e995);
     this.scans = new Rng(seed ^ 0x27d4eb2f);
+    this.fsRng = new Rng(seed ^ 0x6c8e9cf5);
   }
 
   // ---------------------------------------------------------------------------
@@ -115,6 +126,8 @@ export class Adapters {
   private mesScan(b: BodyRef, p: PlantPoint, direction: 'in' | 'out', t: number, opts: { reliable?: boolean; delayMin?: number } = {}) {
     if (!opts.reliable && this.scans.chance(0.01)) return;
     let ts = t + this.scans.range(0, opts.delayMin ?? 2) * MIN;
+    // сканер участка «завис»: отметки уходят пачкой, когда его перезапустят
+    if (this.mesHold && this.mesHold.area === p.stageId && ts < this.mesHold.until) ts = this.mesHold.until + this.scans.range(0, 1) * MIN;
     ts = Math.max(ts, (this.lastScan.get(b.bodyId) ?? 0) + 5000);
     this.lastScan.set(b.bodyId, ts);
     const event = (at: number): CanonicalEvent => ({
@@ -325,6 +338,11 @@ export class Adapters {
       }
 
       case 'state':
+        // контроллер «врёт»: настоящее состояние запоминаем и пришлём, когда сбой датчика пройдёт
+        if (this.glitch?.equipmentId === e.equipmentId) {
+          this.glitch.real = { status: e.status, code: e.code, text: e.text };
+          break;
+        }
         if (this.emits(e.equipmentId, 'state')) this.out.mqtt('plc', topics.state(e.area, e.equipmentId), { status: e.status, code: e.code, text: e.text, ts: toPlantIso(e.t) }, 1);
         break;
 
@@ -353,8 +371,46 @@ export class Adapters {
     }
   }
 
+  /**
+   * Ложный сигнал сейчас: на ступени 1+ — сбой датчика робота сварки (контроллер шлёт «авария»,
+   * кузова при этом идут), на ступени 0 — сканер 1С:MES сварки отдаёт отметки с опозданием.
+   */
+  falseSignal(t: number, minutes: number, equipmentId?: string): string | null {
+    const plant = this.plant();
+    const weld = plant.production.find((s) => s.kind === 'welding');
+    if (!weld) return null;
+    if (this.stage() >= 1) {
+      if (this.glitch) return null;
+      const robots = weld.equipment.filter((e) => !e.passive && e.type.serviceIntervalCycles && this.emits(e.id, 'state'));
+      const eq = robots.find((e) => e.id === equipmentId) ?? robots[this.fsRng.int(0, robots.length - 1)];
+      if (!eq) return null;
+      this.glitch = { equipmentId: eq.id, area: weld.id, until: t + minutes * MIN, real: { status: 'run' } };
+      this.out.mqtt('plc', topics.state(weld.id, eq.id), { status: 'fault', code: 'E-417', text: 'Датчик положения: нет сигнала', ts: toPlantIso(t) }, 1);
+      return `контроллер ${eq.id}: ложная авария на ${Math.round(minutes)} мин`;
+    }
+    if (this.mesHold) return null;
+    this.mesHold = { area: weld.id, until: t + minutes * MIN };
+    return `сканер 1С:MES участка ${weld.short}: отметки с опозданием ${Math.round(minutes)} мин`;
+  }
+
+  private tickFalseSignals(now: number) {
+    if (this.glitch && now >= this.glitch.until) {
+      const g = this.glitch;
+      this.glitch = null;
+      if (this.emits(g.equipmentId, 'state')) this.out.mqtt('plc', topics.state(g.area, g.equipmentId), { ...g.real, ts: toPlantIso(now) }, 1);
+    }
+    if (this.mesHold && now >= this.mesHold.until) this.mesHold = null;
+    if (!this.falseSignals) return;
+    // в среднем раз в 2,5 часа рабочего времени
+    if (this.nextFalseAt === null) this.nextFalseAt = now + this.fsRng.range(40, 260) * MIN;
+    if (now < this.nextFalseAt) return;
+    this.nextFalseAt = now + this.fsRng.range(60, 240) * MIN;
+    if (shiftAt(now)) this.falseSignal(now, this.fsRng.range(8, 16));
+  }
+
   /** Отложенные записи мастера в 1С:MES, время которых наступило */
   flushDue(now: number) {
+    this.tickFalseSignals(now);
     if (!this.pendingMes.length) return;
     const due = this.pendingMes.filter((p) => p.at <= now).sort((a, b) => a.at - b.at);
     if (!due.length) return;

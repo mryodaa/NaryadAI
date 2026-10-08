@@ -12,5 +12,6 @@ export * from './plant-diff';
 export * from './text-ru';
 export * from './identification';
 export * from './operations';
+export * from './crew';
 export type * from './plant-config';
 export type * from './snapshot';

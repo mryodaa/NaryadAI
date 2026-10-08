@@ -12,7 +12,7 @@ import { StatusMark } from './StatusMark';
 import { AreaCars } from './AreaCars';
 import { Trend } from './Trend';
 import { useTranslation } from '../../i18n/store';
-import { translateDynamicText } from '../../i18n/translator';
+import { translateDynamicText, translateEquipmentName } from '../../i18n/translator';
 import type { Translations, Lang } from '../../i18n/types';
 
 const ROW_TEXT = 'text-[0.9375rem] 2xl:text-base';
@@ -125,7 +125,7 @@ function EquipmentLine({ d, e }: { d: AreaDetail; e: EquipmentRow }) {
   const ev = lastEvent(d, e, lang);
   return (
     <tr className="border-t border-line">
-      <td className={cx(TD, 'font-medium')}>{e.name}</td>
+      <td className={cx(TD, 'font-medium')}>{translateEquipmentName(e.name, lang)}</td>
       <td className={TD}>{st ? <StatusMark status={st} extra={e.code ? `${lang === 'kk' ? 'код:' : lang === 'en' ? 'code' : 'код'} ${e.code}` : undefined} wrap /> : <span className="text-ink-3">{t.shop.noPlcData}</span>}</td>
       <td className={cx(TD, 'num whitespace-nowrap')}>
         <Resource e={e} lang={lang} />
@@ -166,7 +166,7 @@ function lastEvent(d: AreaDetail, e: AreaDetail['equipment'][number], lang: Lang
   if (s) {
     const raw = s.text.replace(/^Контроллер [^:]+:\s*/, '');
     const translated = translateDynamicText(raw, lang);
-    return { source: s.source, at: timeHM(s.ts), text: translated.charAt(0).toUpperCase() + translated.slice(1), full: translateDynamicText(s.text, lang) };
+    return { source: s.source, at: timeHM(s.ts, lang), text: translated.charAt(0).toUpperCase() + translated.slice(1), full: translateDynamicText(s.text, lang) };
   }
   if (e.code) {
     const codePrefix = lang === 'kk' ? 'код:' : lang === 'en' ? 'code' : 'код';
@@ -196,7 +196,7 @@ function StockTable({ stock }: { stock: NonNullable<AreaDetail['stock']> }) {
           const low = s.shiftsLeft !== null && s.shiftsLeft < 2;
           return (
             <tr key={s.kitId} className="border-t border-line">
-              <td className={TD}>{s.name}</td>
+              <td className={TD}>{translateDynamicText(s.name, lang)}</td>
               <td className={cx(TD, 'num')}>{s.qty === null ? '—' : `${num(s.qty)} ${t.common.piecesUnit}`}</td>
               <td className={cx(TD, 'num', low && cx('font-semibold', TONE_CLASS.attention.ink))}>
                 {s.shiftsLeft === null ? (

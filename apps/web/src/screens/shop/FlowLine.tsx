@@ -5,13 +5,13 @@ import { usePlantModel } from '../../state/plant';
 import { AREA_STATUS, TONE_CLASS, cx } from '../../lib/tones';
 import { num1 } from '../../lib/format';
 import { useTranslation } from '../../i18n/store';
-import { translateArea, translateDynamicText, translateStatus } from '../../i18n/translator';
+import { translateArea, translateDynamicText, translateEquipmentName, translateStatus } from '../../i18n/translator';
 import type { Translations, Lang } from '../../i18n/types';
 
 const MAX_SHELLS = 10;
 
 /** «ABB-01…04», «Камеры-01, 02», «Конвейер-03» — подзаголовок связывает названия из 1С с участком */
-function subtitle(stage: PlantStage, t: Translations, _lang: Lang): string {
+function subtitle(stage: PlantStage, t: Translations, lang: Lang): string {
   switch (stage.kind) {
     case 'warehouse_in':
       return t.shop.flowSubtitleWarehouseIn;
@@ -24,10 +24,10 @@ function subtitle(stage: PlantStage, t: Translations, _lang: Lang): string {
       const robots = eq.filter((e) => e.type.id === 'spot_robot');
       if (robots.length > 1) return t.shop.robotsLabel(compactIds(robots.map((e) => e.id)));
       const booths = eq.filter((e) => e.type.id === 'paint_booth');
-      if (booths.length) return compactNames(booths.map((e) => e.name));
+      if (booths.length) return compactNames(booths.map((e) => e.name), lang);
       const conveyors = eq.filter((e) => e.type.id === 'conveyor');
-      if (conveyors.length) return conveyors.map((e) => e.name).join(', ');
-      return eq.map((e) => e.name).slice(0, 2).join(', ');
+      if (conveyors.length) return conveyors.map((e) => translateEquipmentName(e.name, lang)).join(', ');
+      return eq.map((e) => translateEquipmentName(e.name, lang)).slice(0, 2).join(', ');
     }
   }
 }
@@ -40,11 +40,15 @@ function compactIds(ids: string[]): string {
 }
 
 /** Камера-01, Камера-02 → Камеры-01, 02 */
-function compactNames(names: string[]): string {
-  if (names.length === 1) return names[0]!;
+function compactNames(names: string[], lang: Lang): string {
+  if (names.length === 1) return translateEquipmentName(names[0]!, lang);
   const m = names.map((n) => /^(.*?)-(\d+)$/.exec(n));
-  if (m.some((x) => !x) || new Set(m.map((x) => x![1])).size > 1) return names.join(', ');
-  return `${inflect(m[0]![1]!, 'gen')}-${m.map((x) => x![2]).join(', ')}`;
+  if (m.some((x) => !x) || new Set(m.map((x) => x![1])).size > 1) return names.map((n) => translateEquipmentName(n, lang)).join(', ');
+  const base = m[0]![1]!;
+  const nums = m.map((x) => x![2]).join(', ');
+  if (lang === 'kk') return `${nums}-камералар`;
+  if (lang === 'en') return `Booths-${nums}`;
+  return `${inflect(base, 'gen')}-${nums}`;
 }
 
 export function FlowLine({
@@ -150,7 +154,7 @@ function AreaCard({ area, stage, onClick }: { area: AreaView; stage: PlantStage;
 }
 
 function WarehouseCard({ area, stage, onClick }: { area: AreaView; stage: PlantStage; onClick?: (id: AreaId) => void }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const low = !!area.worstKit && area.worstKit.shiftsLeft < 2;
   const tone = low ? 'attention' : 'neutral';
   return (
@@ -160,7 +164,7 @@ function WarehouseCard({ area, stage, onClick }: { area: AreaView; stage: PlantS
       <Count label={t.shop.stockShiftsLabel} value={num1(area.stockShifts ?? 0)} />
       {area.worstKit && (
         <div className={cx('text-base font-medium leading-snug', low ? 'text-st-attention-ink' : 'text-ink-2')}>
-          {t.shop.shiftsForKit(area.worstKit.name, num1(area.worstKit.shiftsLeft))}
+          {t.shop.shiftsForKit(translateDynamicText(area.worstKit.name, lang), num1(area.worstKit.shiftsLeft))}
         </div>
       )}
     </CardShell>
@@ -171,7 +175,7 @@ function FinishedCard({ area, stage, onClick }: { area: AreaView; stage: PlantSt
   const { t } = useTranslation();
   return (
     <CardShell id={area.id} tone="neutral" onClick={onClick}>
-      <Title stage={stage} title={t.shop.warehouseTitle} />
+      <Title stage={stage} title={t.domain.areas.finished.name} />
       <StatusChip tone="neutral" label={t.shop.warehouseAccepting} />
       <Count label={t.shop.acceptedPerShift} value={area.done} />
     </CardShell>

@@ -6,6 +6,7 @@ import type { ScenarioId, Stage } from './scenarios';
 import type { ModelId } from './plant';
 import type { ColorFinish, IdMethod } from './identification';
 import type { VisualEffect } from './operations';
+import type { CrewView } from './crew';
 
 /** reduced — встала одна из параллельных станций: участок работает, но мощность ниже */
 export type AreaStatus = 'running' | 'reduced' | 'starved' | 'blocked' | 'fault' | 'degraded_quality' | 'maintenance' | 'idle';
@@ -74,6 +75,8 @@ export interface AreaView {
   planToNow: number;
   /** Одна строка причины, если есть отклонение */
   reason: string | null;
+  /** Отклонение пока только по сигналу: signal — один источник, probable — два, на месте не проверено */
+  check?: 'signal' | 'probable';
   /** Только склад комплектующих */
   stockShifts?: number;
   worstKit?: { name: string; shiftsLeft: number } | null;
@@ -94,6 +97,22 @@ export interface AttentionItem {
   openedAt: string;
   /** Появился недавно — мягкая подсветка */
   fresh: boolean;
+  /** Проверка на месте: signal — один источник, probable — совпали два, confirmed — подтвердил человек */
+  check?: IncidentCheck;
+  /** Кто заметил */
+  sources?: SourceId[];
+}
+
+export type IncidentCheck = 'signal' | 'probable' | 'confirmed' | 'rejected';
+
+/** Сигнал, который мастер на месте не подтвердил: у руководителя исчезает с причиной */
+export interface DismissedItem {
+  incidentId: string;
+  title: string;
+  area: AreaId;
+  /** Код причины мастера (NoReason) */
+  reason: string | null;
+  at: string;
 }
 
 export interface TimelineSegment {
@@ -147,6 +166,8 @@ export interface LiveSnapshot {
   buffers: BufferView[];
   attention: AttentionItem[];
   attentionTotal: number;
+  /** Сигналы, снятые мастером за последние 20 минут */
+  dismissed: DismissedItem[];
   timeline: { segments: TimelineSegment[]; marks: TimelineMark[] };
   /** Честное пояснение о неполноте данных на текущей ступени */
   dataNote: string | null;
@@ -286,4 +307,6 @@ export type ServerMessage =
   | { t: 'plant'; config: PlantConfig }
   | { t: 'connections'; items: ConnectionRuntime[] }
   /** Кузова в цехе: раз в секунду */
-  | { t: 'bodies'; at: string; items: BodyView[] };
+  | { t: 'bodies'; at: string; items: BodyView[] }
+  /** Рабочее место мастера: сигналы, журнал, запросы, сдача смены */
+  | { t: 'crew'; data: CrewView };

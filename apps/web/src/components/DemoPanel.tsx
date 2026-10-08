@@ -142,6 +142,16 @@ export function DemoPanel() {
             })}
           </div>
 
+          <div className="mb-1 text-sm text-white/60">{t.crew.injectTitle}</div>
+          <div className="mb-3 flex gap-1.5">
+            <button type="button" onClick={() => post.mutate({ path: 'inject', body: { kind: 'false_signal' } })} className="flex-1 rounded-lg bg-white/10 px-1.5 py-1.5 text-sm font-medium hover:bg-white/20">
+              {t.crew.injectFalse}
+            </button>
+            <button type="button" onClick={() => post.mutate({ path: 'inject', body: { kind: 'booth_stop' } })} className="flex-1 rounded-lg bg-white/10 px-1.5 py-1.5 text-sm font-medium hover:bg-white/20">
+              {t.crew.injectBooth}
+            </button>
+          </div>
+
           <div className="mb-1 text-sm text-white/60">{t.demo.stageTitle}</div>
           <div className="flex gap-1.5">
             {STAGES.map((s) => {

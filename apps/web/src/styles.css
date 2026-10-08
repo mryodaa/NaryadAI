@@ -44,6 +44,42 @@
   color-scheme: light;
 }
 
+/* Тёмная тема — рабочее место мастера на телефоне (в цехе, в перчатках) */
+[data-theme='dark'] {
+  --page: #0e1116;
+  --surface: #181c22;
+  --surface-2: #222830;
+  --line: #2c323b;
+  --line-strong: #3b424d;
+  --ink: #eef1f5;
+  --ink-2: #b6beca;
+  --ink-3: #9099a6;
+
+  --accent: #5b8dff;
+  --accent-ink: #9bb8ff;
+  --accent-bg: #1a2640;
+
+  --st-neutral: #9aa3ae;
+  --st-neutral-ink: #d3d8de;
+  --st-neutral-bg: #232830;
+  --st-waiting: #7f9fc3;
+  --st-waiting-ink: #b3cae4;
+  --st-waiting-bg: #1b2634;
+  --st-attention: #f0a531;
+  --st-attention-ink: #ffcb73;
+  --st-attention-bg: #2e2412;
+  --st-fault: #f2586e;
+  --st-fault-ink: #ff95a4;
+  --st-fault-bg: #351a20;
+  --st-maintenance: #a684f6;
+  --st-maintenance-ink: #cbb6ff;
+  --st-maintenance-bg: #2a2142;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.55);
+  color-scheme: dark;
+}
+
 @theme inline {
   --font-sans: 'Golos Text Variable', 'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;

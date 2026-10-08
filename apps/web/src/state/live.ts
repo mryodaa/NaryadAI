@@ -1,6 +1,6 @@
 // Живое состояние из WebSocket /ws: снимок двойника, лента входящих, источники.
 import { create } from 'zustand';
-import type { BodyView, FeedItem, LiveSnapshot, ServerMessage, SourceStatus } from '@allur/contracts/ref';
+import type { BodyView, CrewView, FeedItem, LiveSnapshot, ServerMessage, SourceStatus } from '@allur/contracts/ref';
 import { setConnections, setPlantConfig } from './plant';
 
 type Conn = 'connecting' | 'open' | 'closed';
@@ -13,6 +13,8 @@ interface LiveState {
   sources: SourceStatus[];
   /** Кузова в цехе по трекеру двойника (раз в секунду) */
   bodies: BodyView[];
+  /** Рабочее место мастера: сигналы, журнал, запросы */
+  crew: CrewView | null;
   lastMessageAt: number;
 }
 
@@ -23,6 +25,7 @@ export const useLive = create<LiveState>(() => ({
   feed: [],
   sources: [],
   bodies: [],
+  crew: null,
   lastMessageAt: 0,
 }));
 
@@ -70,6 +73,9 @@ export function connectLive() {
         break;
       case 'bodies':
         useLive.setState({ bodies: msg.items });
+        break;
+      case 'crew':
+        useLive.setState({ crew: msg.data });
         break;
     }
   };

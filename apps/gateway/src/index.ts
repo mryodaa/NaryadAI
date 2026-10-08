@@ -25,6 +25,9 @@ import { viewRoutes } from './routes/views';
 import { plantRoutes, withRuntime } from './routes/plant';
 import { PlantStore } from './plant';
 import { ConnectionMonitor } from './connections';
+import { Crew } from './crew';
+import { RequestDesk } from './requests';
+import { crewRoutes } from './routes/crew';
 import { registerAuth } from './auth';
 import type { Ctx } from './context';
 
@@ -50,6 +53,15 @@ db.clearLive();
 clock.start((process.env.START_SCENARIO as import('@allur/contracts').ScenarioId) ?? 'live_day');
 const twin = new TwinService(db, clock, plant.config);
 hub.addSink(twin);
+// Наряд уходит в цех (MQTT → 1С:ТОиР, в демо — имитаторы) только после согласия мастера
+const desk = new RequestDesk(
+  () => plant.model,
+  (wo, req) => {
+    broker?.publish(topics.workOrders, wo, { qos: 1 });
+    db.addDecision({ id: wo.workOrderId, runId: clock.runId, incidentId: wo.incidentId, optionId: req.optionId ?? '', decidedAt: clock.now(), decidedBy: req.by, workOrder: wo });
+  },
+);
+const crew = new Crew(twin, () => plant.model, desk);
 
 let broker: MqttBroker | null = null;
 
@@ -62,6 +74,15 @@ const ctx: Ctx = {
   front,
   plant,
   connections,
+  crew,
+  crewChanged() {
+    const now = clock.now();
+    twin.tick(now);
+    crew.sync(now);
+    front.broadcast({ t: 'crew', data: crew.view(now) });
+    const snap = twin.snapshot(now);
+    if (snap) front.broadcast({ t: 'snapshot', data: snap });
+  },
   mqtt: () => broker,
   resetRun(scenario) {
     // демо всегда стартует с исходного состава цеха; правки редактора остаются в истории версий
@@ -69,6 +90,7 @@ const ctx: Ctx = {
     clock.reset({ scenario });
     db.clearLive();
     twin.reset(clock.runStartMs);
+    crew.reset();
     publishClock();
     log(`сброс: прогон ${clock.runId}, сценарий ${clock.scenario}`);
   },
@@ -111,6 +133,7 @@ app.get('/ws', { websocket: true }, (socket) => {
   initial.push({ t: 'plant', config: withRuntime(ctx, plant.config) });
   initial.push({ t: 'connections', items: connections.status(plant.model, clock.stage, clock.simulateAll) });
   initial.push({ t: 'bodies', at: new Date(clock.now()).toISOString(), items: twin.bodies(clock.now()) });
+  initial.push({ t: 'crew', data: crew.view(clock.now()) });
   front.add(socket, initial);
 });
 
@@ -127,6 +150,7 @@ twinRoutes(app, ctx);
 demoRoutes(app, ctx);
 viewRoutes(app, ctx);
 plantRoutes(app, ctx);
+crewRoutes(app, ctx);
 
 // Видео с постов: настоящий ролик — файл data/media/clips/<имя>.mp4; пока его нет — честная заглушка
 app.get<{ Params: { name: string } }>('/media/clips/:name', async (req, reply) => {
@@ -198,6 +222,7 @@ const loop = setInterval(() => {
   clock.tick();
   const now = clock.now();
   twin.tick(now);
+  crew.sync(now);
   publishClock();
   if (front.size > 0) {
     const snap = twin.snapshot(now);
@@ -209,6 +234,7 @@ const loop = setInterval(() => {
       front.broadcast({ t: 'sources', items: sources.status(clock.stage) });
       front.broadcast({ t: 'connections', items: connections.status(plant.model, clock.stage, clock.simulateAll) });
       front.broadcast({ t: 'bodies', at: new Date(now).toISOString(), items: twin.bodies(now) });
+      front.broadcast({ t: 'crew', data: crew.view(now) });
     }
   } else {
     hub.drainFeed();

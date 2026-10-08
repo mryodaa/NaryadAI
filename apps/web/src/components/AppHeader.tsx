@@ -6,6 +6,7 @@ import { cx } from '../lib/tones';
 import { CarSearch } from './CarSearch';
 import { WatchBadge } from './Watch';
 import { LanguageSwitcher } from './LanguageSwitcher';
+import { CrewInbox } from './CrewInbox';
 import { useTranslation } from '../i18n/store';
 
 /**
@@ -87,6 +88,7 @@ export function AppHeader({ now, shiftIndex, speed }: { now: string | null; shif
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 2xl:gap-3">
+          <CrewInbox />
           <WatchBadge wide={wide} />
           <CarSearch wide={wide} />
           <LanguageSwitcher compact={!wide} />

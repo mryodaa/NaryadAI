@@ -49,7 +49,7 @@ let plantLoading: Promise<void> | null = null;
 const control = mqtt.connect(MQTT_URL, { clientId: `sim-control-${process.pid}`, reconnectPeriod: 2000 });
 control.on('connect', () => {
   log(`подключился к брокеру ${MQTT_URL}, жду часы шлюза`);
-  control.subscribe([topics.demoClock, topics.workOrders, topics.plantConfig, topics.simProbe], { qos: 1 });
+  control.subscribe([topics.demoClock, topics.workOrders, topics.plantConfig, topics.simProbe, topics.simCommand], { qos: 1 });
 });
 control.on('error', (e) => log(`MQTT: ${e.message}`));
 control.on('message', (topic, payload) => {
@@ -71,6 +71,15 @@ control.on('message', (topic, payload) => {
   } else if (topic === topics.plantConfig) {
     const v = (json as { version?: unknown })?.version;
     if (typeof v === 'number' && v !== plantVersion) void loadPlant();
+  } else if (topic === topics.simCommand) {
+    const kind = (json as { kind?: unknown })?.kind;
+    if (run && kind === 'false_signal') {
+      const what = run.adapters.falseSignal(run.world.t, 25, 'ABB-05');
+      log(what ? `пульт: ложный сигнал — ${what}` : 'пульт: ложный сигнал уже идёт');
+    } else if (run && kind === 'booth_stop') {
+      const ok = run.world.startDowntime('BOOTH-01', run.world.t, 20, { reason: 'Сбой подачи краски', category: 'breakdown', code: 'E-212', text: 'Давление краски ниже нормы' });
+      log(ok ? 'пульт: короткая остановка Камеры-01 на 20 мин' : 'пульт: Камера-01 уже стоит');
+    }
   } else if (topic === topics.simProbe) {
     const r = SimProbeRequest.safeParse(json);
     if (r.success) answerProbe(r.data.requestId, r.data.equipmentId);
@@ -182,6 +191,7 @@ function startRun(msg: DemoClock) {
     () => plant,
     () => clock?.msg.simulateAll ?? false,
   );
+  adapters.falseSignals = setup.preset.randomFailures;
   run = { runId: msg.runId, world, adapters };
   log(`прогон ${msg.runId}: сценарий «${msg.scenario}», прокручиваю утро до ${new Date(msg.simTime).toISOString().slice(11, 16)} UTC`);
   adapters.wip(world, RUN_START_MS);

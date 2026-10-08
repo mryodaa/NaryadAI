@@ -4,7 +4,7 @@ import type { RibbonStage } from '../../state/stages';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { timeHM } from '../../lib/format';
 import { useI18n } from '../../i18n/store';
-import { translateDynamicText } from '../../i18n/translator';
+import { translateArea, translateCarAppearance, translateDynamicText } from '../../i18n/translator';
 
 export function StageRibbon({ stages }: { stages: RibbonStage[] }) {
   const { t, lang } = useI18n();
@@ -29,7 +29,7 @@ export function StageRibbon({ stages }: { stages: RibbonStage[] }) {
               >
                 {b.kind === 'loop' ? <RotateCcw className="mt-px size-3.5 shrink-0" strokeWidth={2.5} aria-hidden /> : <CornerDownRight className="mt-px size-3.5 shrink-0" strokeWidth={2.5} aria-hidden />}
                 <span className="min-w-0">
-                  <span className="font-semibold">{b.title}</span>
+                  <span className="font-semibold">{translateDynamicText(b.title, lang)}</span>
                   {b.from && (
                     <span className="num block">
                       {timeHM(b.from, lang)}
@@ -50,12 +50,14 @@ export function StageRibbon({ stages }: { stages: RibbonStage[] }) {
 function StageCard({ s, markText, open, onToggle }: { s: RibbonStage; markText: Record<RibbonStage['mark'], string>; open: boolean; onToggle: () => void }) {
   const { t, lang } = useI18n();
   const future = s.mark === 'ahead' || s.mark === 'queue';
+  const stageName = translateArea(s.id, lang, 'short') || translateDynamicText(s.name, lang);
+  const lineName = s.line ? translateDynamicText(s.line, lang) : null;
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      aria-label={`${s.name}${s.line ? `, ${s.line}` : ''}: ${markText[s.mark]}`}
+      aria-label={`${stageName}${lineName ? `, ${lineName}` : ''}: ${markText[s.mark]}`}
       className={cx(
         'flex min-h-[8.5rem] flex-col gap-1 rounded-xl px-2.5 py-2 text-left shadow-card ring-1 transition-colors focus-visible:outline-2 focus-visible:outline-accent',
         s.mark === 'now' ? 'bg-accent-bg ring-accent' : future ? 'bg-page text-ink-3 ring-line' : 'bg-surface ring-line hover:bg-surface-2',
@@ -65,8 +67,8 @@ function StageCard({ s, markText, open, onToggle }: { s: RibbonStage; markText: 
       <span className="flex items-center gap-1.5">
         <BodyLookIcon look={s.look} faded={future} />
         <span className="min-w-0 flex-1">
-          <span className={cx('block truncate font-semibold', future ? 'text-ink-3' : 'text-ink')}>{s.name}</span>
-          {s.line && <span className="block truncate text-xs text-ink-3">{s.line}</span>}
+          <span className={cx('block truncate font-semibold', future ? 'text-ink-3' : 'text-ink')}>{stageName}</span>
+          {lineName && <span className="block truncate text-xs text-ink-3">{lineName}</span>}
         </span>
         <ChevronDown className={cx('size-4 shrink-0 text-ink-3 transition-transform', open && 'rotate-180')} aria-hidden />
       </span>
@@ -116,9 +118,11 @@ function MarkIcon({ mark }: { mark: RibbonStage['mark'] }) {
 
 /** Силуэт кузова цветом его вида: металл, катафорез, грунт, цвет, сборка; на стенде — с роликами */
 function BodyLookIcon({ look, faded }: { look: RibbonStage['look']; faded: boolean }) {
+  const { lang } = useI18n();
+  const label = translateCarAppearance(look.kind, lang);
   return (
-    <span title={look.label} className={cx('grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2', faded && 'opacity-50')}>
-      <svg viewBox="0 0 32 20" className="h-5 w-8" aria-label={look.label} role="img">
+    <span title={label} className={cx('grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2', faded && 'opacity-50')}>
+      <svg viewBox="0 0 32 20" className="h-5 w-8" aria-label={label} role="img">
         {look.kind === 'kit' ? (
           <rect x="5" y="6" width="22" height="10" rx="1.5" fill={look.color} stroke="#6b5537" strokeWidth="1" />
         ) : (
@@ -140,6 +144,8 @@ function BodyLookIcon({ look, faded }: { look: RibbonStage['look']; faded: boole
 
 function StageDetails({ s }: { s: RibbonStage }) {
   const { t, lang } = useI18n();
+  const stageName = translateArea(s.id, lang, 'short') || translateDynamicText(s.name, lang);
+  const lineName = s.line ? translateDynamicText(s.line, lang) : null;
   const loops = [...new Set(s.ops.map((o) => o.loop))];
   const result: Record<string, { text: string; icon: typeof CircleCheck; cls: string }> = {
     done: { text: t.quality.resDone, icon: CircleCheck, cls: 'text-st-neutral' },
@@ -162,8 +168,8 @@ function StageDetails({ s }: { s: RibbonStage }) {
   return (
     <div className="mt-3 rounded-xl bg-surface p-3 shadow-card ring-1 ring-line">
       <h3 className="mb-1.5 font-semibold">
-        {s.name}
-        {s.line ? ` · ${s.line}` : ''}: {t.quality.stageOperations}
+        {stageName}
+        {lineName ? ` · ${lineName}` : ''}: {t.quality.stageOperations}
       </h3>
       {loops.map((loop) => (
         <div key={loop} className={cx(loop > 0 && 'mt-2 border-l-4 border-st-attention pl-2.5')}>

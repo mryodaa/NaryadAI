@@ -11,7 +11,7 @@ import { IncidentModal } from '../shop/IncidentModal';
 import { cx } from '../../lib/tones';
 import { num, pct0 } from '../../lib/format';
 import { useI18n } from '../../i18n/store';
-import { translateDynamicText } from '../../i18n/translator';
+import { translateArea, translateDynamicText, translateEquipmentName } from '../../i18n/translator';
 
 const RISK = {
   высокий: { icon: OctagonX, cls: 'bg-st-fault-bg text-st-fault-ink' },
@@ -72,8 +72,8 @@ export function EquipmentScreen() {
               return (
                 <tr key={e.id} className="border-b border-line last:border-0">
                   <td className="px-4 py-3 align-top">
-                    <div className="font-semibold">{e.name}</div>
-                    <div className="text-sm text-ink-3">{stageShort(model, e.area)}</div>
+                    <div className="font-semibold">{translateEquipmentName(e.name, lang)}</div>
+                    <div className="text-sm text-ink-3">{translateArea(e.area, lang, 'short') || stageShort(model, e.area)}</div>
                   </td>
                   <td className="w-[22rem] px-4 py-3 align-top">
                     {e.resourceLeft !== null ? (

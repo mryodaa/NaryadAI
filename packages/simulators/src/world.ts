@@ -264,7 +264,7 @@ export class World {
   private stats: ShiftStats | null = null;
   private dayFactor = 1;
   private chainBreakAt: Record<string, number | null> = {};
-  private scheduled: { at: number; run: () => void }[] = [];
+  private scheduled: { at: number; run: () => void; id?: string }[] = [];
   private delayed: { kitId: string; untilMs: number }[];
   private downSeq = 0;
   private lastTelemetryMin = -1;
@@ -1232,6 +1232,14 @@ export class World {
   // Наряды от двойника выполняют «люди завода» в назначенное время
 
   applyWorkOrder(wo: WorkOrder) {
+    // тот же наряд пришёл снова (мастер сделал раньше срока) — прежнее время отменяется
+    this.scheduled = this.scheduled.filter((s) => s.id !== wo.workOrderId);
+    const before = this.scheduled.length;
+    this.applyWorkOrderAt(wo);
+    for (let i = before; i < this.scheduled.length; i++) this.scheduled[i]!.id = wo.workOrderId;
+  }
+
+  private applyWorkOrderAt(wo: WorkOrder) {
     const at = Math.max(this.t, Date.parse(wo.scheduledAt));
     const minutes = wo.durationMin ?? 0;
     const done = () => this.emit({ kind: 'work_done', t: Math.max(this.t, at), workOrderId: wo.workOrderId, title: wo.title });

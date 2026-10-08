@@ -10,6 +10,7 @@ import { dismissToast, toggleWatch, useWatch } from '../state/watch';
 import { useEscLayer } from './overlay';
 import { timeHM } from '../lib/format';
 import { useTranslation } from '../i18n/store';
+import { translateDynamicText } from '../i18n/translator';
 
 export function WatchBadge({ wide }: { wide: boolean }) {
   const { t, lang } = useTranslation();
@@ -88,8 +89,8 @@ export function WatchBadge({ wide }: { wide: boolean }) {
               <ul className="max-h-40 overflow-y-auto px-4 pb-3">
                 {events.slice(0, 8).map((e) => (
                   <li key={e.id} className="flex gap-2.5 py-0.5 text-[0.9375rem]">
-                    <span className="num w-11 shrink-0 text-ink-3">{timeHM(e.at)}</span>
-                    <span>{e.text}</span>
+                    <span className="num w-11 shrink-0 text-ink-3">{timeHM(e.at, lang)}</span>
+                    <span>{translateDynamicText(e.text, lang)}</span>
                   </li>
                 ))}
               </ul>
@@ -103,7 +104,7 @@ export function WatchBadge({ wide }: { wide: boolean }) {
 
 /** Ненавязчивый тост о переходе стадии: внизу по центру, 4 секунды, новый заменяет старый */
 export function WatchToast() {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const toast = useWatch((s) => s.toast);
   useEffect(() => {
     if (!toast) return;
@@ -115,7 +116,7 @@ export function WatchToast() {
       {toast && (
         <div key={toast.id} className="view-in pointer-events-auto flex items-center gap-2 rounded-xl bg-ink px-4 py-2 text-[0.9375rem] font-medium text-white shadow-pop">
           <Star className="size-4 shrink-0 fill-current text-[#f5c542]" aria-hidden />
-          {toast.text}
+          {translateDynamicText(toast.text, lang)}
           <button type="button" onClick={dismissToast} aria-label={t.common.close} className="ml-1 grid size-6 place-items-center rounded-md text-white/70 hover:bg-white/10 hover:text-white">
             <X className="size-3.5" />
           </button>

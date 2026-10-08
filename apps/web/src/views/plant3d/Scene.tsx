@@ -58,7 +58,7 @@ export interface SceneProps {
 
 export function Scene(props: SceneProps) {
   const { layout, palette, data, stage, flow, focusArea, reducedMotion, portal, onHover, onPick } = props;
-  const { lang } = useTranslation();
+  const { t, lang } = useTranslation();
   const mats = useMaterials(palette);
   const live = data.plcConnected && stage >= 1;
   const b = layout.bounds;
@@ -108,7 +108,8 @@ export function Scene(props: SceneProps) {
             rect={layout.zones[area]}
             name={translateArea(area, lang, 'name') || data.rows[area]?.name || area}
             tone={data.rows[area]?.status.tone ?? 'neutral'}
-            statusLabel={translateStatus(data.rows[area]?.status.label ?? '', lang)}
+            statusLabel={data.rows[area]?.check === 'signal' ? t.crew.signalUnverified : translateStatus(data.rows[area]?.status.label ?? '', lang)}
+            unverified={data.rows[area]?.check === 'signal'}
             selected={focusArea === area}
             dimmed={focusArea !== null && focusArea !== area}
             labelY={i % 2 ? 10.2 : 7.6}
@@ -177,6 +178,7 @@ const Zone = memo(function Zone({
   name,
   tone,
   statusLabel,
+  unverified,
   selected,
   dimmed,
   labelY,
@@ -191,6 +193,8 @@ const Zone = memo(function Zone({
   name: string;
   tone: Tone;
   statusLabel: string;
+  /** Отклонение только по сигналу одного источника — контур пунктиром */
+  unverified: boolean;
   selected: boolean;
   /** выбран другой участок — подпись этой зоны не нужна в кадре */
   dimmed: boolean;
@@ -275,13 +279,11 @@ const Zone = memo(function Zone({
           <boxGeometry args={[sx, 0.9, sz]} />
         </mesh>
       ))}
-      <Line
-        ref={lineRef as never}
-        points={outline}
-        color={initial}
-        lineWidth={1.4}
-        transparent
-      />
+      {unverified ? (
+        <Line ref={lineRef as never} points={outline} color={initial} lineWidth={1.4} transparent dashed dashSize={1.6} gapSize={1.1} />
+      ) : (
+        <Line ref={lineRef as never} points={outline} color={initial} lineWidth={1.4} transparent />
+      )}
       {!dimmed && (
       <Html portal={portal as never} position={[midX, labelY, rect.z0 + 0.6]} center zIndexRange={Z_LABEL} pointerEvents="none">
         <div className="flex select-none flex-col items-center gap-1">
@@ -625,6 +627,7 @@ function Plaques({ layout, data, portal }: { layout: PlantLayout; data: SceneDat
                 className={cx(
                   'view-in pointer-events-auto inline-flex max-w-[15rem] items-center gap-1.5 whitespace-nowrap rounded-xl border-l-4 bg-surface py-1.5 pl-2 pr-3 text-[0.9375rem] font-semibold text-ink shadow-pop hover:bg-surface-2',
                   TONE_CLASS[it.p.tone].border,
+                  it.p.check === 'signal' && 'border-2 border-dashed text-ink-2',
                 )}
               >
                 <Icon className={cx('size-4 shrink-0', TONE_CLASS[it.p.tone].ink)} strokeWidth={2.25} aria-hidden />

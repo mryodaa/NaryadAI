@@ -2,7 +2,7 @@
 // участков и список инцидентов (REST, общий кэш с боковой панелью). Своих показателей здесь нет.
 import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { inflect, type AreaId, type FeedItem, type LiveSnapshot, type Tone } from '@allur/contracts/ref';
+import { inflect, type AreaId, type AttentionItem, type FeedItem, type LiveSnapshot, type Tone } from '@allur/contracts/ref';
 import { api } from '../../api/client';
 import type { AreaDetail, Incident } from '../../api/types';
 import { usePaintDefect } from '../../api/queries';
@@ -10,6 +10,7 @@ import { areaRows, type AreaRowView } from '../../state/selectors';
 import { useLive } from '../../state/live';
 import { usePlantModel } from '../../state/plant';
 import { useIssuedOrders } from '../../state/decisions';
+import { useTranslation } from '../../i18n/store';
 import { num, num1, timeHM } from '../../lib/format';
 
 export type EqStatus = AreaDetail['equipment'][number]['status'];
@@ -33,6 +34,8 @@ export interface Plaque {
   impact: string;
   area: AreaId;
   equipmentId?: string;
+  /** Непроверенный сигнал — пунктир */
+  check?: AttentionItem['check'];
 }
 
 /** Плашка принятого решения: наряд, который видно в цехе */
@@ -75,6 +78,9 @@ export function useSceneData(s: LiveSnapshot): SceneData {
   // ток и вибрацию привода шлюз не отдаёт по REST — берём последние значения из ленты входящих сообщений
   const drive = useLive((x) => (s.stage >= 2 ? drives.map((d) => `${d.id}=${driveTelemetry(x.feed, d.id)}`).join(';') : ''));
   const issued = useIssuedOrders();
+  // запросы мастерам: пока мастер не принял, над оборудованием — статус запроса, после — наряд, как раньше
+  const requests = useLive((x) => x.crew?.requests);
+  const { t } = useTranslation();
 
   return useMemo(() => {
     const rows: SceneData['rows'] = {};
@@ -98,15 +104,28 @@ export function useSceneData(s: LiveSnapshot): SceneData {
     const plaques: Plaque[] = s.attention
       .filter((a) => a.tone !== 'neutral')
       .slice(0, 3)
-      .map((a) => ({ incidentId: a.incidentId, tone: a.tone, title: a.title, impact: a.impact, area: a.area, equipmentId: byId.get(a.incidentId)?.equipmentId }));
+      .map((a) => ({ incidentId: a.incidentId, tone: a.tone, title: a.title, impact: a.impact, area: a.area, equipmentId: byId.get(a.incidentId)?.equipmentId, check: a.check }));
 
     const nowMs = Date.parse(s.now);
     const decisions: DecisionPlaque[] = [];
     for (const inc of incidents ?? []) {
       if (!inc.decision || inc.status === 'resolved') continue;
+      const req = requests?.find((r) => r.incidentId === inc.id);
+      if (req && (req.status === 'sent' || req.status === 'viewed' || req.status === 'counter' || req.status === 'cant')) {
+        const text =
+          req.status === 'sent'
+            ? t.crew.plaqueSent
+            : req.status === 'viewed'
+              ? t.crew.plaqueViewed
+              : req.status === 'counter'
+                ? t.crew.plaqueCounter(timeHM(req.counter?.at ?? req.dueAt))
+                : t.crew.plaqueCant;
+        decisions.push({ incidentId: inc.id, area: inc.area, equipmentId: inc.equipmentId, text, tone: req.status === 'cant' ? 'attention' : 'neutral' });
+        continue;
+      }
       const wo = inc.options.find((o) => o.id === inc.decision!.optionId)?.workOrder;
       if (!wo) continue;
-      const shown = decisionText(wo.action, issued[inc.id] ?? wo.scheduledAt, inc.equipmentId ? equipment[inc.equipmentId]?.status : null, nowMs);
+      const shown = decisionText(wo.action, req?.workOrderAt ?? issued[inc.id] ?? wo.scheduledAt, inc.equipmentId ? equipment[inc.equipmentId]?.status : null, nowMs);
       if (shown) decisions.push({ incidentId: inc.id, area: inc.area, equipmentId: inc.equipmentId, ...shown });
     }
 
@@ -132,7 +151,7 @@ export function useSceneData(s: LiveSnapshot): SceneData {
 
     return { rows, equipment, plcConnected, stock, plaques, decisions, sensors };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, paintDefect, model, detailsKey, incidents, drive, drives, issued]);
+  }, [s, paintDefect, model, detailsKey, incidents, drive, drives, issued, requests, t]);
 }
 
 /** Текст плашки наряда: до назначенного времени — «запланировано», во время работ — «идёт» */

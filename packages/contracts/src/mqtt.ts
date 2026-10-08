@@ -34,6 +34,8 @@ export const topics = {
   simProbe: `${TOPIC_ROOT}/demo/sim-probe`,
   /** Ответ имитатора на опрос (публикует имитатор) */
   simProbeReply: (requestId: string) => `${TOPIC_ROOT}/sim/probe-reply/${requestId}`,
+  /** Служебный топик демо: пульт просит имитатор устроить событие (ложный сигнал, короткую остановку) */
+  simCommand: `${TOPIC_ROOT}/demo/sim-command`,
   /** Наряды от двойника в системы завода */
   workOrders: `${TOPIC_ROOT}/twin/work-orders`,
   /** Двойник применил новую версию конфигурации завода (plant_config_changed) */

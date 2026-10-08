@@ -25,7 +25,7 @@ function TileLabel({ children }: { children: React.ReactNode }) {
 }
 
 function MonthPlanTile({ plan, onWhy }: { plan: Kpi['monthPlan']; onWhy?: () => void }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const behind = !plan.onTrack;
   return (
     <Card className="@container flex flex-col gap-2 p-3.5 2xl:p-4">
@@ -52,7 +52,7 @@ function MonthPlanTile({ plan, onWhy }: { plan: Kpi['monthPlan']; onWhy?: () => 
         {t.kpi.monthPlanForecast} <span className="num font-semibold text-ink">{num(plan.forecast)}</span> {t.kpi.monthPlanTarget} {num(plan.target)}
         {plan.mainCause && (
           <>
-            {' · '}{t.kpi.monthPlanMainCause} <span className="font-semibold text-ink">{translateDynamicText(plan.mainCause)}</span>
+            {' · '}{t.kpi.monthPlanMainCause} <span className="font-semibold text-ink">{translateDynamicText(plan.mainCause, lang)}</span>
           </>
         )}
       </div>
@@ -61,7 +61,7 @@ function MonthPlanTile({ plan, onWhy }: { plan: Kpi['monthPlan']; onWhy?: () => 
 }
 
 function ShiftOutputTile({ out, now }: { out: Kpi['shiftOutput']; now: string }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const lag = out.planToNow - out.done;
   const behind = lag > 2;
   const donePct = Math.min(100, (out.done / out.plan) * 100);
@@ -82,7 +82,7 @@ function ShiftOutputTile({ out, now }: { out: Kpi['shiftOutput']; now: string })
           {behind && <TriangleAlert className="size-[1.05em] shrink-0" strokeWidth={2.25} aria-hidden />}
           {behind ? t.kpi.shiftOutputBehind(lag) : t.kpi.shiftOutputOnTrack}
         </span>
-        <span className="num text-ink-3">{t.kpi.shiftOutputPlanToNow(timeHM(now), out.planToNow)}</span>
+        <span className="num text-ink-3">{t.kpi.shiftOutputPlanToNow(timeHM(now, lang), out.planToNow)}</span>
       </div>
     </Card>
   );
@@ -105,12 +105,12 @@ function OeeTile({ oee }: { oee: Kpi['oee'] }) {
 }
 
 function DefectsTile({ d }: { d: Kpi['defects'] }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const model = usePlantModel();
   const worst = d.worst && d.worst.pct > 0 ? d.worst : null;
   const value = worst ? worst.pct : d.pct;
   const high = value > d.norm;
-  const worstAreaName = worst ? translateAreaName(stageShort(model, worst.area)).toLowerCase() : '';
+  const worstAreaName = worst ? translateAreaName(stageShort(model, worst.area), lang).toLowerCase() : '';
   return (
     <Card className="flex flex-col gap-1.5 p-3.5 2xl:p-4">
       <TileLabel>{t.kpi.defectsTitle}</TileLabel>

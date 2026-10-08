@@ -1,6 +1,6 @@
 // Связка шлюза с ядром двойника. Ядро (twin-core) — чистая логика без сети;
 // шлюз кормит его событиями и тиками часов, забирает снимки и выдаёт решения нарядами.
-import { Twin, NO_LEVERS, plantCapacity, type Levers, type MoneyParams, type PlantCapacityView } from '@allur/twin-core';
+import { Twin, NO_LEVERS, checkable, plantCapacity, type Levers, type MoneyParams, type PlantCapacityView, type Verdict } from '@allur/twin-core';
 import { derivePlant, type CanonicalEvent, type LiveSnapshot, type PlantConfig, type WorkOrder } from '@allur/contracts';
 import type { Db } from './db';
 import type { DemoClock } from './clock';
@@ -72,6 +72,15 @@ export class TwinService {
 
   incident(id: string) {
     return this.twin.incident(id);
+  }
+
+  /** Остановки и брак — всё, что мастер может проверить на месте (и уже закрытые) */
+  checkableIncidents() {
+    return this.twin.ready ? this.twin.book.all().filter(checkable) : [];
+  }
+
+  setVerdict(key: string, v: Verdict) {
+    this.twin.setVerdict(key, v);
   }
 
   forecast(now: number, levers: Levers = NO_LEVERS) {

@@ -18,6 +18,7 @@ import {
   type BufferId,
   type Explain,
   type ExplainInput,
+  type IncidentCheck,
   type PlantEquipment,
   type SourceId,
   type Tone,
@@ -76,9 +77,25 @@ export interface Incident {
   explain: Explain;
   signals: Signal[];
   decision: { optionId: string; decidedAt: number; decidedBy?: string; workOrderId: string; title: string } | null;
+  /**
+   * Проверка на месте (только остановки и брак — то, что видно в цехе): signal — заметил один источник,
+   * probable — совпали два независимых, confirmed — подтвердил человек, rejected — мастер не подтвердил
+   */
+  check?: IncidentCheck;
+  /** Кто заметил — без самого двойника */
+  checkSources?: SourceId[];
+  /** Ответ мастера: код причины «Нет», когда и кто */
+  verdict?: Verdict;
 }
 
-type Draft = Omit<Incident, 'id' | 'openedAt' | 'updatedAt' | 'resolvedAt' | 'status' | 'decision'> & { since: number };
+export interface Verdict {
+  verdict: 'yes' | 'no';
+  reason?: string;
+  by?: string;
+  at: number;
+}
+
+type Draft = Omit<Incident, 'id' | 'openedAt' | 'updatedAt' | 'resolvedAt' | 'status' | 'decision' | 'check' | 'checkSources' | 'verdict'> & { since: number };
 
 export interface DetectContext {
   state: TwinState;
@@ -377,10 +394,17 @@ const TYPICAL_STOP_MIN: [RegExp, number][] = [
   [/дозиров/i, 20],
 ];
 
-function detectStop(ctx: DetectContext, area: AreaId): Draft | null {
-  const ev = ctx.evals[area];
+/** Ключ инцидента-остановки по статусу участка; null — статус не остановка (или плановая работа по наряду) */
+export function stopKey(area: AreaId, ev: AreaEval | undefined, now: number): string | null {
   if (!ev || !(ev.status === 'fault' || ev.status === 'maintenance' || ev.status === 'reduced' || (ev.status === 'starved' && ev.reason?.startsWith('Нет комплектов')))) return null;
   if ((ev.status === 'maintenance' || ev.status === 'reduced') && /план|наряд/i.test(ev.reason ?? '')) return null;
+  return `stop:${area}:${Math.round((ev.since ?? now) / 60_000)}`;
+}
+
+function detectStop(ctx: DetectContext, area: AreaId): Draft | null {
+  const ev = ctx.evals[area];
+  const key = stopKey(area, ev, ctx.now);
+  if (!ev || !key) return null;
   const { cfg, now } = ctx;
   const areaShort = (a: AreaId) => stageShort(ctx.state.plant, a);
   const reduced = ev.status === 'reduced' && ev.stations ? ev.stations : null;
@@ -422,7 +446,7 @@ function detectStop(ctx: DetectContext, area: AreaId): Draft | null {
     },
   ]);
   return {
-    key: `stop:${area}:${Math.round(since / 60_000)}`,
+    key,
     type: 'stop',
     area,
     equipmentId: eqId,
@@ -790,10 +814,30 @@ function detectEarlyWarning(ctx: DetectContext, drive: PlantEquipment): Draft | 
 export class IncidentBook {
   private byKey = new Map<string, Incident>();
   private seq = 0;
+  /** Ответы мастера по ключу инцидента. «Нет» живёт, пока длится то же отклонение (см. Twin.tick) */
+  private verdicts = new Map<string, Verdict>();
 
   reset() {
     this.byKey.clear();
     this.seq = 0;
+    this.verdicts.clear();
+  }
+
+  /** Мастер на месте ответил на сигнал */
+  setVerdict(key: string, v: Verdict) {
+    this.verdicts.set(key, v);
+    const inc = this.byKey.get(key);
+    if (inc && inc.status !== 'resolved') applyCheck(inc, v);
+  }
+
+  /** Ключи, которые мастер не подтвердил */
+  rejectedKeys(): Set<string> {
+    return new Set([...this.verdicts].filter(([, v]) => v.verdict === 'no').map(([k]) => k));
+  }
+
+  /** Отклонение кончилось — «Нет» мастера больше ни к чему не относится */
+  dropVerdict(key: string) {
+    this.verdicts.delete(key);
   }
 
   all(): Incident[] {
@@ -840,6 +884,7 @@ export class IncidentBook {
       if (prev && prev.status !== 'resolved') {
         const decision = prev.decision;
         Object.assign(prev, d, { id: prev.id, openedAt: prev.openedAt, updatedAt: ctx.now, decision, status: decision ? 'decided' : 'open' });
+        applyCheck(prev, this.verdicts.get(d.key));
         if (decision) {
           // после решения угроза — по выбранному варианту
           const chosen = prev.options.find((o) => o.id === decision.optionId);
@@ -851,13 +896,17 @@ export class IncidentBook {
         }
       } else {
         const id = `inc-${d.type}-${++this.seq}`;
-        this.byKey.set(d.key, { ...d, id, openedAt: Math.min(d.since, ctx.now), updatedAt: ctx.now, resolvedAt: null, status: 'open', decision: null });
+        const inc: Incident = { ...d, id, openedAt: Math.min(d.since, ctx.now), updatedAt: ctx.now, resolvedAt: null, status: 'open', decision: null };
+        applyCheck(inc, this.verdicts.get(d.key));
+        this.byKey.set(d.key, inc);
       }
     }
     for (const [key, inc] of this.byKey) {
       if (seen.has(key) || inc.status === 'resolved') continue;
       inc.status = 'resolved';
       inc.resolvedAt = ctx.now;
+      // «Да» относится к этому случаю; тот же ключ позже — новый случай. «Нет» по остановке снимает Twin.tick
+      if (this.verdicts.get(key)?.verdict === 'yes' || !key.startsWith('stop:')) this.verdicts.delete(key);
     }
     // старые закрытые — не копим
     for (const [key, inc] of this.byKey) {
@@ -887,7 +936,7 @@ export class IncidentBook {
   expectedLoss(): number {
     let sum = 0;
     for (const i of this.byKey.values()) {
-      if (i.status === 'resolved') continue;
+      if (i.status === 'resolved' || i.check === 'rejected') continue;
       if (i.decision) {
         const o = i.options.find((x) => x.id === i.decision!.optionId);
         sum += o?.carsLost ?? 0;
@@ -901,6 +950,22 @@ export class IncidentBook {
 }
 
 // ---------------------------------------------------------------------------
+
+/** Остановки и брак видно в цехе — их проверяет мастер; прогнозы и склад — нет */
+export function checkable(inc: Pick<Incident, 'type'>): boolean {
+  return inc.type === 'stop' || inc.type === 'quality';
+}
+
+/** Независимые источники: двойник сам по себе — не источник */
+function applyCheck(inc: Incident, v: Verdict | undefined) {
+  if (!checkable(inc)) return;
+  const sources = [...new Set([...inc.explain.sources, ...inc.signals.map((s) => s.source)].filter((s): s is SourceId => s !== 'twin'))];
+  inc.checkSources = sources;
+  inc.verdict = v;
+  if (v?.verdict === 'no') inc.check = 'rejected';
+  else if (v?.verdict === 'yes' || sources.includes('master')) inc.check = 'confirmed';
+  else inc.check = sources.length >= 2 ? 'probable' : 'signal';
+}
 
 function lowerFirst(s: string) {
   return s ? s[0]!.toLowerCase() + s.slice(1) : s;

@@ -96,7 +96,7 @@ export function SettingsScreen() {
 
 /** Во сколько раз время двойника идёт быстрее настоящего — для показа сценариев за минуты */
 function SpeedCard() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const qc = useQueryClient();
   const speed = useLive((s) => s.snapshot?.speed ?? null);
   const paused = useLive((s) => s.snapshot?.paused ?? false);
@@ -135,7 +135,7 @@ function SpeedCard() {
           </span>
           <input
             inputMode="numeric"
-            aria-label="Ускорение времени, раз"
+            aria-label={lang === 'kk' ? 'Уақытты жеделдету, есе' : lang === 'en' ? 'Time speedup, multiplier' : 'Ускорение времени, раз'}
             placeholder={speed === null ? '60' : String(speed)}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

@@ -142,7 +142,7 @@ export function QualityScreen() {
                 onClick={() => setOpen(r.vin)}
                 className="rounded-lg bg-st-attention-bg px-2.5 py-1 font-mono text-sm text-st-attention-ink hover:underline"
               >
-                {r.vin} · {translateDynamicText(r.defect.split(' (')[0]!, lang).toLowerCase()} · {timeHM(r.at)}
+                {r.vin} · {translateDynamicText(r.defect.split(' (')[0]!, lang).toLowerCase()} · {timeHM(r.at, lang)}
               </button>
             ))}
             {d.lastVins.slice(0, 2).map((v) => (

@@ -1,276 +1,165 @@
-// Экран мастера на телефоне: «Что случилось на моём участке?» — регистрация за 2 касания, в перчатках.
-// Отправка идёт в тот же REST шлюза, что и у 1С.
+// Рабочее место мастера на телефоне: три вкладки внизу — «Сейчас», «Журнал», «Смена» — и одно окно записи.
+// Одна рука, перчатки: кнопки от 56 px, текст 18 px, тёмная тема. Участок выбирается один раз.
+// Главное правило: у мастера не прибавляется работы — обязательна только причина простоя.
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Check, Cog, PackageX, Settings2, Hourglass, CircleHelp, Wrench, TriangleAlert } from 'lucide-react';
-import type { AreaId, StageKind } from '@allur/contracts/ref';
-import { api } from '../../api/client';
+import { Bell, ClipboardList, Gauge, MapPin } from 'lucide-react';
+import type { AreaId, LogEntry } from '@allur/contracts/ref';
 import { useLive } from '../../state/live';
 import { usePlant, usePlantModel } from '../../state/plant';
-import { cx } from '../../lib/tones';
-import { useI18n } from '../../i18n/store';
-import { translateDynamicText } from '../../i18n/translator';
+import { useTranslation } from '../../i18n/store';
 import { LanguageSwitcher } from '../../components/LanguageSwitcher';
+import { timeHM } from '../../lib/format';
+import { cx } from '../../lib/tones';
+import { NowTab } from './NowTab';
+import { LogTab, needsReason } from './LogTab';
+import { ShiftTab } from './ShiftTab';
+import { EntrySheet } from './EntrySheet';
+import { areaShort } from './crewText';
 
-const REASON_KEYS = [
-  { id: 'breakdown', icon: Wrench },
-  { id: 'no_parts', icon: PackageX },
-  { id: 'setup', icon: Settings2 },
-  { id: 'waiting', icon: Hourglass },
-  { id: 'other', icon: CircleHelp },
-] as const;
+type Tab = 'now' | 'log' | 'shift';
+const AREA_KEY = 'master-area';
 
-/** Дефекты, которые мастер отмечает на участке — по виду участка */
-const DEFECTS: Partial<Record<StageKind, { id: string; label: string }[]>> = {
-  welding: [
-    { id: 'weld_geometry', label: 'Геометрия кузова' },
-    { id: 'weld_spot', label: 'Непровар точки' },
-  ],
-  painting: [
-    { id: 'paint_dirt', label: 'Сорность' },
-    { id: 'paint_run', label: 'Потёки' },
-    { id: 'paint_thin', label: 'Непрокрас' },
-  ],
-  assembly: [
-    { id: 'asm_gap', label: 'Зазоры' },
-    { id: 'asm_torque', label: 'Не дотянуто' },
-    { id: 'asm_electric', label: 'Электрика' },
-  ],
-  inspection: [
-    { id: 'asm_leak', label: 'Протечка' },
-    { id: 'asm_gap', label: 'Зазоры' },
-    { id: 'asm_electric', label: 'Электрика' },
-  ],
-};
-
-type Step = 'home' | 'downtime' | 'defect' | 'sent';
-
-function loadArea(): AreaId {
+function loadArea(): AreaId | null {
   const production = usePlant.getState().model.production;
   try {
-    const v = localStorage.getItem('master-area');
+    const v = localStorage.getItem(AREA_KEY);
     if (v && production.some((a) => a.id === v)) return v as AreaId;
   } catch {
-    /* хранилище недоступно — участок по умолчанию */
+    /* хранилище недоступно — спросим участок */
   }
-  return production.find((a) => a.kind === 'assembly')?.id ?? production[0]?.id ?? 'assembly';
+  return null;
+}
+
+/** Тёмная тема — только на телефоне мастера */
+function useDarkTheme() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const prev = root.dataset.theme;
+    root.dataset.theme = 'dark';
+    return () => {
+      if (prev) root.dataset.theme = prev;
+      else delete root.dataset.theme;
+    };
+  }, []);
 }
 
 export function MasterScreen() {
-  const { t, lang } = useI18n();
+  useDarkTheme();
+  const { t, lang } = useTranslation();
   const model = usePlantModel();
-  // участки мастера — производственные участки из конфигурации завода
-  const AREAS = model.production.map((s) => ({
-    id: s.id,
-    name: t.domain.areas[s.id]?.short ?? s.short,
-    kind: s.kind,
-  }));
-  const [area, setArea] = useState<AreaId>(loadArea);
-  const [step, setStep] = useState<Step>('home');
-  const [eq, setEq] = useState<string>('');
-  const [sent, setSent] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
-  const stage = model.stageById.get(area);
-  const kind = stage?.kind ?? 'custom';
-  const equipment = (stage?.equipment ?? []).filter((e) => !e.passive);
+  const [area, setArea] = useState<AreaId | null>(loadArea);
+  const [tab, setTab] = useState<Tab>('now');
+  const [sheet, setSheet] = useState<{ entryId: string | null; initial: LogEntry | null } | null>(null);
+  const snapshot = useLive((s) => s.snapshot);
+  const crew = useLive((s) => s.crew);
 
-  const reasonLabels: Record<string, string> = {
-    breakdown: t.master.reasonBreakdown,
-    no_parts: t.master.reasonNoParts,
-    setup: t.master.reasonSetup,
-    waiting: t.master.reasonWaiting,
-    other: t.master.reasonOther,
-  };
-
-  useEffect(() => {
+  const pick = (id: AreaId | null) => {
     try {
-      localStorage.setItem('master-area', area);
+      if (id) localStorage.setItem(AREA_KEY, id);
+      else localStorage.removeItem(AREA_KEY);
     } catch {
-      /* не страшно */
+      /* не страшно — спросим ещё раз */
     }
-    setEq(equipment.find((e) => e.critical)?.id ?? equipment[0]?.id ?? '');
-  }, [area]);
-
-  useEffect(() => {
-    if (step !== 'sent') return;
-    const tTimer = setTimeout(() => setStep('home'), 3500);
-    return () => clearTimeout(tTimer);
-  }, [step]);
-
-  const sendDowntime = async (reasonId: (typeof REASON_KEYS)[number]['id'], label: string) => {
-    setError(null);
-    try {
-      await api('/api/v1/downtimes', {
-        method: 'POST',
-        json: { source: 'master', area, equipmentId: eq, reason: label, category: reasonId, registeredBy: `Мастер участка «${AREAS.find((a) => a.id === area)!.name}»` },
-      });
-      const eqName = model.equipmentById.get(eq)?.name ?? '';
-      setSent(t.master.sentDowntimeMsg(label, eqName));
-      setStep('sent');
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    setArea(id);
+    setTab('now');
   };
 
-  const sendDefect = async (defect: string, label: string) => {
-    setError(null);
-    try {
-      // время — по часам двойника (в демо оно идёт с ускорением)
-      const now = useLive.getState().snapshot?.now ?? new Date(Date.now() + 5 * 3600_000).toISOString().replace(/\.\d+Z$/, '+05:00');
-      await api('/api/v1/events', {
-        method: 'POST',
-        json: [
-          {
-            eventId: `master-nc-${crypto.randomUUID()}`,
-            source: 'master',
-            ts: now,
-            area,
-            type: 'nonconformity',
-            payload: {
-              checkpoint: kind === 'welding' ? 'CP-WELD' : kind === 'painting' ? 'CP-PAINT' : 'CP-FINAL',
-              defect,
-              decision: kind === 'painting' ? 'repaint' : 'rework',
-              // брак, найденный на контроле, — на совести сборки
-              responsibleArea: kind === 'inspection' ? (model.production.find((s) => s.kind === 'assembly')?.id ?? area) : area,
-              count: 1,
-            },
-          },
-        ],
-      });
-      setSent(t.master.sentDefectMsg(label));
-      setStep('sent');
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
+  if (!area || !model.stageById.has(area)) return <AreaSetup onPick={pick} />;
+
+  const name = areaShort(model, t, area);
+  const by = lang === 'kk'
+    ? `«${name}» учаскесінің шебері`
+    : lang === 'en'
+    ? `Foreman of "${name}" area`
+    : `Мастер участка «${model.stageById.get(area)?.short ?? area}»`;
+  const areaView = snapshot?.areas.find((a) => a.id === area) ?? null;
+  const entries = (crew?.log ?? []).filter((e) => e.area === area);
+  const openSignals =
+    (crew?.signals ?? []).filter((s) => s.area === area && (s.status === 'open' || s.status === 'later')).length +
+    (crew?.requests ?? []).filter((r) => r.area === area && (r.status === 'sent' || r.status === 'viewed')).length;
+  const withoutReason = entries.filter(needsReason).length;
+  const sheetEntry = sheet ? (sheet.entryId ? (entries.find((e) => e.entryId === sheet.entryId) ?? sheet.initial) : null) : null;
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[30rem] flex-col bg-page px-4 pb-6 pt-4">
-      <header className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          {step !== 'home' && step !== 'sent' ? (
-            <button type="button" onClick={() => setStep('home')} className="grid size-14 place-items-center rounded-2xl bg-surface shadow-card" aria-label={t.common.back}>
-              <ArrowLeft className="size-7" />
-            </button>
-          ) : (
-            <img src="/favicon.svg" alt="" className="size-10" />
-          )}
-          <div className="leading-tight">
-            <div className="text-xl font-semibold">{t.master.headerTitle}</div>
-            <div className="text-base text-ink-2">{t.master.headerLocation}</div>
-          </div>
-        </div>
+    <div className="mx-auto flex min-h-screen max-w-[30rem] flex-col bg-page text-ink">
+      <header className="sticky top-0 z-10 flex items-center justify-between gap-2 bg-page/95 px-4 pb-2 pt-3 backdrop-blur">
+        <button type="button" onClick={() => pick(null)} className="flex min-h-14 min-w-0 items-center gap-2 text-left" aria-label={t.crew.changeArea}>
+          <MapPin className="size-6 shrink-0 text-ink-2" aria-hidden />
+          <span className="min-w-0 leading-tight">
+            <span className="block truncate text-xl font-semibold">{name}</span>
+            <span className="block text-base text-ink-2">
+              {snapshot?.shift ? t.crew.shiftLabel(snapshot.shift.index) : t.crew.noShift}
+              {snapshot ? ` · ${timeHM(snapshot.now)}` : ''}
+            </span>
+          </span>
+        </button>
         <LanguageSwitcher />
       </header>
 
-      {step === 'home' && (
-        <>
-          <div className="mb-4 grid grid-cols-4 gap-2" role="radiogroup" aria-label={t.master.selectArea}>
-            {AREAS.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                role="radio"
-                aria-checked={area === a.id}
-                onClick={() => setArea(a.id)}
-                className={cx('min-h-14 rounded-2xl px-1 text-lg font-semibold', area === a.id ? 'bg-ink text-white' : 'bg-surface text-ink shadow-card')}
-              >
-                {a.name}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => setStep('downtime')}
-            className="mb-3 flex min-h-[9rem] flex-col items-center justify-center gap-2 rounded-3xl bg-st-fault text-white shadow-pop active:scale-[0.99]"
-          >
-            <Cog className="size-12" />
-            <span className="text-[2rem] font-bold">{t.master.actionDowntime}</span>
+      <main className="flex-1 px-4 pb-28 pt-2">
+        {tab === 'now' && (
+          <NowTab
+            area={area}
+            areaView={areaView}
+            signals={crew?.signals ?? []}
+            requests={crew?.requests ?? []}
+            by={by}
+            onOpenEntry={(e) => setSheet({ entryId: e.entryId, initial: e })}
+          />
+        )}
+        {tab === 'log' && (
+          <LogTab entries={entries} nowIso={snapshot?.now ?? null} onOpen={(e) => setSheet({ entryId: e.entryId, initial: e })} onAdd={() => setSheet({ entryId: null, initial: null })} />
+        )}
+        {tab === 'shift' && <ShiftTab area={area} nowIso={snapshot?.now ?? null} by={by} />}
+      </main>
+
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-surface">
+        <div className="mx-auto grid max-w-[30rem] grid-cols-3">
+          <TabButton active={tab === 'now'} onClick={() => setTab('now')} icon={<Bell className="size-6" aria-hidden />} label={t.crew.tabNow} badge={openSignals} />
+          <TabButton active={tab === 'log'} onClick={() => setTab('log')} icon={<ClipboardList className="size-6" aria-hidden />} label={t.crew.tabLog} badge={withoutReason} />
+          <TabButton active={tab === 'shift'} onClick={() => setTab('shift')} icon={<Gauge className="size-6" aria-hidden />} label={t.crew.tabShift} />
+        </div>
+      </nav>
+
+      {sheet && <EntrySheet key={sheet.entryId ?? 'new'} entry={sheetEntry} area={area} by={by} nowIso={snapshot?.now ?? null} onClose={() => setSheet(null)} />}
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, icon, label, badge }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge?: number }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cx('relative flex min-h-16 flex-col items-center justify-center gap-0.5 text-base font-semibold', active ? 'text-accent-ink' : 'text-ink-2')}
+    >
+      {icon}
+      {label}
+      {!!badge && (
+        <span className="num absolute right-[calc(50%-1.9rem)] top-1.5 min-w-6 rounded-full bg-st-attention px-1.5 text-sm font-bold leading-6 text-black">{badge}</span>
+      )}
+    </button>
+  );
+}
+
+function AreaSetup({ onPick }: { onPick: (id: AreaId) => void }) {
+  const { t } = useTranslation();
+  const model = usePlantModel();
+  return (
+    <div className="mx-auto flex min-h-screen max-w-[30rem] flex-col bg-page px-4 pb-6 pt-4 text-ink">
+      <header className="mb-4 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">{t.crew.setupTitle}</h1>
+        <LanguageSwitcher />
+      </header>
+      <div className="grid grid-cols-2 gap-3">
+        {model.production.map((s) => (
+          <button key={s.id} type="button" onClick={() => onPick(s.id)} className="min-h-20 rounded-2xl bg-surface px-2 text-xl font-semibold ring-1 ring-line active:bg-surface-2">
+            {areaShort(model, t, s.id)}
           </button>
-          <button
-            type="button"
-            onClick={() => setStep('defect')}
-            className="flex min-h-[9rem] flex-col items-center justify-center gap-2 rounded-3xl bg-st-attention text-white shadow-pop active:scale-[0.99]"
-          >
-            <TriangleAlert className="size-12" />
-            <span className="text-[2rem] font-bold">{t.master.actionDefect}</span>
-          </button>
-          <p className="mt-4 text-center text-base text-ink-3">{t.master.masterNote}</p>
-        </>
-      )}
-
-      {step === 'downtime' && (
-        <>
-          {equipment.length > 1 && (
-            <div className="mb-3">
-              <div className="mb-1.5 text-base text-ink-2">{t.master.equipmentTitle}</div>
-              <div className="flex flex-wrap gap-2">
-                {equipment.map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={() => setEq(e.id)}
-                    className={cx('min-h-12 rounded-xl px-3 text-base font-semibold', eq === e.id ? 'bg-ink text-white' : 'bg-surface shadow-card')}
-                  >
-                    {translateDynamicText(e.name, lang).replace(/^(Робот|Роботтық|Robot)\s+/i, '')}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="mb-1.5 text-base text-ink-2">{t.master.chooseReason}</div>
-          <div className="grid grid-cols-2 gap-3">
-            {REASON_KEYS.map((r) => {
-              const Icon = r.icon;
-              const label = reasonLabels[r.id] ?? r.id;
-              return (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => void sendDowntime(r.id, label)}
-                  className={cx('flex min-h-[7rem] flex-col items-center justify-center gap-2 rounded-2xl bg-surface text-xl font-semibold shadow-card active:bg-surface-2', r.id === 'other' && 'col-span-2')}
-                >
-                  <Icon className="size-9 text-ink-2" />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {step === 'defect' && (
-        <>
-          <div className="mb-1.5 text-base text-ink-2">{t.master.chooseDefect}</div>
-          <div className="grid grid-cols-2 gap-3">
-            {[...(DEFECTS[kind] ?? []), { id: 'other', label: t.master.reasonOther }].map((d) => {
-              const translatedLabel = d.id === 'other' ? t.master.reasonOther : translateDynamicText(d.label, lang);
-              return (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => void sendDefect(d.id === 'other' ? t.master.defectOther : d.id, translatedLabel)}
-                  className="flex min-h-[7rem] items-center justify-center rounded-2xl bg-surface px-2 text-center text-xl font-semibold shadow-card active:bg-surface-2"
-                >
-                  {translatedLabel}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {step === 'sent' && (
-        <button type="button" onClick={() => setStep('home')} className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <span className="grid size-36 place-items-center rounded-full bg-ink text-white">
-            <Check className="size-24" strokeWidth={3} />
-          </span>
-          <span className="text-[2rem] font-bold">{t.master.sentConfirmation}</span>
-          <span className="text-lg text-ink-2">{sent}</span>
-          <span className="text-base text-ink-3">{t.master.sentNote}</span>
-        </button>
-      )}
-
-      {error && <p className="mt-4 rounded-xl bg-st-fault-bg p-3 text-lg font-medium text-st-fault-ink">{t.master.notSentError(error)}</p>}
+        ))}
+      </div>
+      <p className="mt-4 text-center text-lg text-ink-2">{t.crew.setupNote}</p>
     </div>
   );
 }

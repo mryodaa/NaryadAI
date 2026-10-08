@@ -108,7 +108,10 @@ function AreaRow({ row, open, shiftRunning, lines, car }: { row: AreaRowView; op
         )}
       </span>
       <Cell v={row.metric} />
-      <Cell v={row.reason} truncate />
+      <span className="flex min-w-0 items-baseline gap-2">
+        <Cell v={row.reason} truncate />
+        {row.check === 'signal' && <span className="shrink-0 rounded border border-dashed border-line-strong px-1.5 text-sm text-ink-2">{t.crew.signalUnverified}</span>}
+      </span>
       {expandable ? <ChevronDown className={cx('size-4 text-ink-3 transition-transform print:hidden', open && 'rotate-180')} aria-hidden /> : <span />}
     </>
   );

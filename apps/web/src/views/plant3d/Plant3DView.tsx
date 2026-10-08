@@ -28,7 +28,7 @@ import { buildReplay } from './replay';
 import { useReplay } from '../../state/replay';
 import { FollowBar } from '../../screens/shop/FollowBar';
 import { useTranslation } from '../../i18n/store';
-import { translateArea, translateDynamicText, translateEquipmentStatus, translateStatus } from '../../i18n/translator';
+import { translateArea, translateDynamicText, translateEquipmentName, translateEquipmentStatus, translateStatus } from '../../i18n/translator';
 import type { Lang } from '../../i18n/types';
 
 /** Пресеты камеры: весь цех и каждый производственный участок */
@@ -177,7 +177,7 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
   return (
     <section
       ref={hostRef}
-      aria-label={sceneSummary(data)}
+      aria-label={sceneSummary(data, lang)}
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Q E + - F Home Escape"
       tabIndex={0}
       data-scene-keys
@@ -512,7 +512,7 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
     const live = data.plcConnected && snapshot.stage >= 1;
     return (
       <div className="flex flex-col gap-1 leading-snug">
-        <div className="font-semibold text-ink">{e?.name ?? hover.id}</div>
+        <div className="font-semibold text-ink">{translateEquipmentName(e?.name ?? hover.id, lang)}</div>
         {live && st ? (
           <div className={cx('font-semibold', st.tone === 'neutral' ? 'text-st-neutral-ink' : TONE_CLASS[st.tone].ink)}>
             {translateEquipmentStatus(st.label, lang)}
@@ -555,7 +555,7 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
       <div className="font-semibold text-ink">{translateDynamicText(sensor.label, lang)}</div>
       {sensor.values.map((v) => (
         <div key={v.name} className="num text-ink-2">
-          {translateDynamicText(v.name, lang)}: <span className="font-semibold text-ink">{v.value}</span>
+          {translateDynamicText(v.name, lang)}: <span className="font-semibold text-ink">{translateDynamicText(v.value, lang)}</span>
         </div>
       ))}
     </div>
@@ -563,8 +563,16 @@ function TipContent({ hover, data, snapshot, layout, bodies }: { hover: HoverTar
 }
 
 /** Описание для экранных читалок: 3D — не единственный способ узнать состояние цеха */
-function sceneSummary(data: SceneData): string {
+function sceneSummary(data: SceneData, lang: Lang): string {
   const bad = Object.values(data.rows).filter((r) => r && r.status.tone !== 'neutral');
+  if (lang === 'kk') {
+    if (!bad.length) return 'Цехтың 3D-үлгісі. Барлық учаскелер ауытқусыз жұмыс істеуде. Толық мәліметтер «Панель» режимінде.';
+    return `Цехтың 3D-үлгісі. ${bad.map((r) => `${translateArea(r!.id, 'kk', 'name')}: ${translateStatus(r!.status.label, 'kk').toLowerCase()}${r!.reason ? ` — ${translateDynamicText(r!.reason.text, 'kk')}` : ''}`).join('; ')}. Толық мәліметтер «Панель» режимінде.`;
+  }
+  if (lang === 'en') {
+    if (!bad.length) return '3D shop model. All areas operating normally. Details in "Panel" mode.';
+    return `3D shop model. ${bad.map((r) => `${translateArea(r!.id, 'en', 'name')}: ${translateStatus(r!.status.label, 'en').toLowerCase()}${r!.reason ? ` — ${translateDynamicText(r!.reason.text, 'en')}` : ''}`).join('; ')}. Details in "Panel" mode.`;
+  }
   if (!bad.length) return '3D-модель цеха. Все участки работают без отклонений. Подробности — в режиме «Панель».';
   return `3D-модель цеха. ${bad.map((r) => `${r!.name}: ${r!.status.label.toLowerCase()}${r!.reason ? ` — ${r!.reason.text}` : ''}`).join('; ')}. Подробности — в режиме «Панель».`;
 }
@@ -575,6 +583,7 @@ function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; d
   const stage = layout.names[b.loc.stageId];
   const stageName = translateArea(b.loc.stageId, lang, 'short') || stage?.short || b.loc.stageId;
   const eq = b.loc.equipmentId ? (data.equipment[b.loc.equipmentId]?.name ?? layout.equipment.find((e) => e.id === b.loc.equipmentId)?.name) : undefined;
+  const localizedEq = eq ? translateEquipmentName(eq, lang) : undefined;
   const min = Math.max(0, Math.round((Date.parse(now) - Date.parse(b.since)) / 60_000));
   const norm = b.normSec ? Math.max(1, Math.round(b.normSec / 60)) : null;
   const delayed = b.flags.includes('delayed');
@@ -584,9 +593,9 @@ function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; d
   else if (b.loc.kind === 'buffer') where = lang === 'kk' ? `«${stageName}» учаскесінен кейінгі кезекте` : lang === 'en' ? `In queue after area "${stageName}"` : `В очереди после участка «${stageName}»`;
   else if (b.loc.precision === 'stage') {
     const unspec = lang === 'kk' ? 'нақты орны белгіленбеген' : lang === 'en' ? 'exact location not marked' : 'точное место не отмечено';
-    const normEq = eq ? (lang === 'kk' ? `, уақыт нормасы бойынша — ${eq}` : lang === 'en' ? `, by time standard — ${eq}` : `, по норме времени — ${eq}`) : '';
+    const normEq = localizedEq ? (lang === 'kk' ? `, уақыт нормасы бойынша — ${localizedEq}` : lang === 'en' ? `, by time standard — ${localizedEq}` : `, по норме времени — ${localizedEq}`) : '';
     where = `${stageName} (${unspec}${normEq})`;
-  } else where = `${stageName}${eq ? `, ${eq}` : ''}`;
+  } else where = `${stageName}${localizedEq ? `, ${localizedEq}` : ''}`;
 
   const nonconformityText = lang === 'kk' ? 'сәйкессіздік бар' : lang === 'en' ? 'nonconformity' : 'есть несоответствие';
   const reworkText = lang === 'kk' ? 'қайта өңдеу' : lang === 'en' ? 'rework pass' : 'повторный проход';
@@ -601,7 +610,7 @@ function BodyTip({ b, layout, data, now }: { b: BodyView; layout: PlantLayout; d
         {b.color ? (
           <>
             <span className="size-3 shrink-0 rounded-full ring-1 ring-line-strong" style={{ background: b.color.hex }} aria-hidden />
-            {b.color.name}
+            {translateDynamicText(b.color.name, lang)}
           </>
         ) : (
           <span className="text-ink-3">{lang === 'kk' ? 'Түс 1С-тен берілмеген' : lang === 'en' ? 'Color not specified in 1C' : 'Цвет не передан из 1С'}</span>

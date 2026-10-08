@@ -49,7 +49,7 @@ import { TONE_CLASS, cx } from '../../lib/tones';
 import { duration, timeHM } from '../../lib/format';
 import { FloatingWindow } from './AreaPanel';
 import { useTranslation } from '../../i18n/store';
-import { translateCarFlag, translateAreaName, translateDynamicText } from '../../i18n/translator';
+import { translateArea, translateCarFlag, translateAreaName, translateDynamicText } from '../../i18n/translator';
 
 /** Машина: то, что пришло по WebSocket (раз в секунду), и подробности с маршрутом (REST) */
 function useCar(bodyId: string) {
@@ -91,7 +91,7 @@ export function CarCard({ bodyId, floating }: { bodyId: string; floating?: boole
 // 1. Шапка: модель, цвет, VIN крупно (последние 6 знаков выделены), номер кузова, паспорт
 
 function CarTitle({ v }: { v: BodyView }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -99,7 +99,7 @@ function CarTitle({ v }: { v: BodyView }) {
         {v.color ? (
           <span className="inline-flex items-center gap-1.5 text-base text-ink-2">
             <span className="size-3.5 shrink-0 rounded-full ring-1 ring-line-strong" style={{ background: v.color.hex }} aria-hidden />
-            {v.color.name}
+            {translateDynamicText(v.color.name, lang)}
           </span>
         ) : (
           <span className="text-base text-ink-3">{t.cars.flagUnknownColor}</span>
@@ -200,7 +200,7 @@ function CarBody({ v, detail }: { v: BodyView; detail: BodyDetail | undefined })
   const now = Date.parse(useLive((s) => s.snapshot?.now) ?? new Date().toISOString());
   const bodies = useLive((s) => s.bodies);
   const buffers = useLive((s) => s.snapshot?.buffers) ?? [];
-  const where = carWhere(v, plant, now);
+  const where = carWhere(v, plant, now, lang);
   const stages = stageProgress(v, plant, detail?.route);
   const eta = carEta(v, detail, plant, bodies, buffers, now);
   const events = detail ? lastEvents(detail.history) : [];
@@ -270,12 +270,13 @@ function CarBody({ v, detail }: { v: BodyView; detail: BodyDetail | undefined })
           <ul className="flex flex-col gap-1">
             {events.map((e, i) => {
               const Icon = EVENT_ICON[e.kind];
+              const eventLabel = translateDynamicText(e.label, lang);
               return (
                 <li key={i} className="flex items-start gap-2">
-                  <span title={e.label} className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-surface-2 text-ink-2">
-                    <Icon className="size-3.5" strokeWidth={2.25} aria-label={e.label} />
+                  <span title={eventLabel} className="mt-px grid size-6 shrink-0 place-items-center rounded-md bg-surface-2 text-ink-2">
+                    <Icon className="size-3.5" strokeWidth={2.25} aria-label={eventLabel} />
                   </span>
-                  <span className="num w-11 shrink-0 pt-0.5 text-sm text-ink-3">{timeHM(e.at)}</span>
+                  <span className="num w-11 shrink-0 pt-0.5 text-sm text-ink-3">{timeHM(e.at, lang)}</span>
                   <span className="min-w-0 flex-1 truncate pt-0.5" title={e.text}>
                     {translateDynamicText(e.text, lang)}
                     {e.restored && <span className="text-ink-3"> · {t.carCard.restoredMark}</span>}
@@ -337,12 +338,12 @@ const EVENT_ICON: Record<EventKind, LucideIcon> = {
 // Лента стадий: выполнено · сейчас · в очереди · впереди
 
 function StageRibbon({ stages }: { stages: CarStage[] }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const markText = (m: CarStage['mark']) => (m === 'done' ? t.carCard.stageDone : m === 'now' ? t.carCard.stageNow : m === 'queue' ? t.carCard.stageQueueBefore : t.carCard.stageAhead);
   return (
     <ol className="grid gap-1" style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}>
       {stages.map((s, i) => {
-        const name = translateAreaName(s.name);
+        const name = translateArea(s.id, lang, 'short') || translateAreaName(s.name, lang);
         return (
           <li key={s.id} className="flex min-w-0 flex-col items-center gap-1 text-center" aria-label={`${name}: ${markText(s.mark)}${s.loop ? `, ${t.carCard.repeatPass}` : ''}`}>
             <div className="relative flex w-full items-center justify-center">
@@ -370,19 +371,19 @@ function StageDot({ mark }: { mark: CarStage['mark'] }) {
 
 /** Операции текущей стадии: свёрнуто — одна строка, развёрнуто — список с галочками */
 function CurrentOps({ stage, ops }: { stage: CarStage; ops: BodyRouteStepView[] }) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const [open, setOpen] = useState(false);
   if (!ops.length) return null;
   const done = ops.filter((o) => o.status === 'done').length;
   const next = ops.find((o) => o.status !== 'done' && o.status !== 'skipped');
-  const stageName = translateAreaName(stage.name);
+  const stageName = translateArea(stage.id, lang, 'short') || translateAreaName(stage.name, lang);
   return (
     <div className="rounded-xl bg-surface px-3 py-2 shadow-card">
       <button type="button" onClick={() => setOpen((x) => !x)} aria-expanded={open} className="flex w-full items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-accent">
         <span className="min-w-0 flex-1">
           <span className="font-semibold">{stageName}:</span>{' '}
           <span className="num text-ink-2">
-            {t.carCard.opsDoneOf(done, ops.length)}{next ? ` · ${t.carCard.nextOp(next.name.toLowerCase())}` : ''}
+            {t.carCard.opsDoneOf(done, ops.length)}{next ? ` · ${t.carCard.nextOp(translateDynamicText(next.name, lang).toLowerCase())}` : ''}
           </span>
         </span>
         {open ? <ChevronUp className="size-4 shrink-0 text-ink-3" aria-hidden /> : <ChevronDown className="size-4 shrink-0 text-ink-3" aria-hidden />}
@@ -399,10 +400,10 @@ function CurrentOps({ stage, ops }: { stage: CarStage; ops: BodyRouteStepView[] 
                 <Circle className="size-4 shrink-0 text-line-strong" strokeWidth={2} aria-label={t.carCard.stageAhead} />
               )}
               <span className={cx('min-w-0 flex-1 truncate', o.status === 'done' ? 'text-ink-2' : 'text-ink')}>
-                {o.name}
+                {translateDynamicText(o.name, lang)}
                 {o.optional ? <span className="text-ink-3"> · {t.carCard.optionalOp}</span> : null}
               </span>
-              {o.at && <span className="num shrink-0 text-sm text-ink-3">{timeHM(o.at)}</span>}
+              {o.at && <span className="num shrink-0 text-sm text-ink-3">{timeHM(o.at, lang)}</span>}
             </li>
           ))}
         </ul>

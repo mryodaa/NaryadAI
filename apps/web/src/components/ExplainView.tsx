@@ -1,6 +1,7 @@
 import type { Explain } from '@allur/contracts/ref';
 import { SourceBadge } from './SourceBadge';
 import { useTranslation } from '../i18n/store';
+import { translateDynamicText } from '../i18n/translator';
 
 export function ExplainView({ explain }: { explain: Explain }) {
   const { lang } = useTranslation();
@@ -13,7 +14,7 @@ export function ExplainView({ explain }: { explain: Explain }) {
     <div className="flex flex-col gap-4 text-base">
       <section>
         <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">{titleHow}</h3>
-        <p className="leading-snug">{explain.rule}</p>
+        <p className="leading-snug">{translateDynamicText(explain.rule, lang)}</p>
       </section>
       {explain.inputs.length > 0 && (
         <section>
@@ -23,9 +24,9 @@ export function ExplainView({ explain }: { explain: Explain }) {
               <li key={k} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3 py-2">
                 <span className="flex items-center gap-2 text-ink-2">
                   <SourceBadge source={i.source} compact />
-                  {i.label}
+                  {translateDynamicText(i.label, lang)}
                 </span>
-                <span className="num font-semibold">{i.value}</span>
+                <span className="num font-semibold">{translateDynamicText(String(i.value), lang)}</span>
               </li>
             ))}
           </ul>
@@ -33,14 +34,14 @@ export function ExplainView({ explain }: { explain: Explain }) {
       )}
       <section className="rounded-xl bg-accent-bg px-3 py-2.5">
         <h3 className="mb-0.5 text-sm font-semibold uppercase tracking-wide text-accent-ink">{titleConclusion}</h3>
-        <p className="font-medium leading-snug">{explain.conclusion}</p>
+        <p className="font-medium leading-snug">{translateDynamicText(explain.conclusion, lang)}</p>
       </section>
       {explain.assumptions && explain.assumptions.length > 0 && (
         <section>
           <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-ink-3">{titleAssumptions}</h3>
           <ul className="list-disc space-y-0.5 pl-5 text-ink-2">
             {explain.assumptions.map((a, k) => (
-              <li key={k}>{a}</li>
+              <li key={k}>{translateDynamicText(a, lang)}</li>
             ))}
           </ul>
         </section>

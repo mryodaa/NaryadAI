@@ -106,8 +106,10 @@ export const DecisionRequest = z
     incidentId: z.string().min(1).max(128),
     optionId: z.string().min(1).max(64),
     decidedBy: z.string().max(100).optional(),
+    /** Срок для мастера; нет — время из варианта решения */
+    dueAt: Timestamp.optional(),
   })
-  .meta({ id: 'DecisionRequest', description: 'Принятие варианта решения по инциденту' });
+  .meta({ id: 'DecisionRequest', description: 'Выбор варианта по инциденту: уходит мастеру участка запросом' });
 
 export type DowntimeRequest = z.infer<typeof DowntimeRequest>;
 export type PlanRequest = z.infer<typeof PlanRequest>;

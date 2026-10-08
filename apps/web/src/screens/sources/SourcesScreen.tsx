@@ -52,6 +52,8 @@ export function SourcesScreen() {
         ))}
       </div>
 
+      <UnconfirmedLine />
+
       <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] items-start gap-3 xl:gap-4">
         <Feed />
         <div className="flex flex-col gap-3 xl:gap-4">
@@ -66,6 +68,16 @@ export function SourcesScreen() {
       </div>
     </main>
   );
+}
+
+/** Сколько сигналов каждого источника мастера не подтвердили на месте за смену — одна строка */
+function UnconfirmedLine() {
+  const { t } = useI18n();
+  const by = useLive((s) => s.crew?.unconfirmedBySource) ?? {};
+  const parts = Object.entries(by)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([src, n]) => `${t.crew.sources[src] ?? src} — ${n}`);
+  return <p className="px-1 text-base text-ink-2">{parts.length ? t.crew.unconfirmedLine(parts.join(', ')) : t.crew.unconfirmedNone}</p>;
 }
 
 function StageSwitch({ stage }: { stage: Stage }) {
@@ -289,7 +301,7 @@ function Links() {
           </div>
           {result.issues.slice(0, 3).map((i, k) => (
             <div key={k} className="text-sm text-st-fault-ink">
-              строка {i.row}: {i.path} — {i.message}
+              {lang === 'kk' ? `жол ${i.row}` : lang === 'en' ? `row ${i.row}` : `строка ${i.row}`}: {i.path} — {i.message}
             </div>
           ))}
           <div className="mt-1 text-sm text-ink-3">{t.sources.uploadContradictionsNote(result.contradictions.length)}</div>

@@ -96,8 +96,17 @@ export function twinRoutes(app: FastifyInstance, ctx: Ctx) {
       return reply.code(400).send({ error: 'validation_failed', message: issues[0]?.message, issues });
     }
     const now = clock.now();
+    const inc = twin.incident(r.data.incidentId);
+    const option = inc?.options.find((o) => o.id === r.data.optionId);
     const outcome = twin.decide(r.data.incidentId, r.data.optionId, r.data.decidedBy, now);
     if (!outcome.ok) return reply.code(404).send({ error: 'not_found', message: outcome.error });
+    // Работы на оборудовании участка — запросом мастеру: наряд уйдёт в цех, когда мастер примет
+    if (inc && option && ctx.crew.desk.needsMaster(inc, option)) {
+      const due = r.data.dueAt ? Date.parse(r.data.dueAt) : outcome.workOrder ? Date.parse(outcome.workOrder.scheduledAt) : now;
+      const request = ctx.crew.desk.create(inc, option, outcome.workOrder ?? null, due, r.data.decidedBy, now);
+      ctx.crewChanged();
+      return { ...outcome, workOrder: undefined, request };
+    }
     if (outcome.workOrder) {
       ctx.mqtt()?.publish(topics.workOrders, outcome.workOrder, { qos: 1 });
       db.addDecision({

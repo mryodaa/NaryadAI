@@ -128,24 +128,33 @@ export function duration(minutes: number, lang?: Lang): string {
 /** Склонение с поддержкой ru, kk, en */
 export function plural(n: number, forms: [string, string, string], lang?: Lang): string {
   const l = currentLang(lang);
+  let effectiveForms = forms;
+  if (forms === CARS || (forms[0] === 'машина' && forms[2] === 'машин')) {
+    effectiveForms = getCarsUnit(l);
+  } else if (forms === BODIES || (forms[0] === 'кузов' && forms[2] === 'кузовов')) {
+    effectiveForms = getBodiesUnit(l);
+  } else if (forms[0] === 'смена' && forms[2] === 'смен') {
+    effectiveForms = l === 'kk' ? ['ауысым', 'ауысым', 'ауысым'] : l === 'en' ? ['shift', 'shifts', 'shifts'] : forms;
+  }
+
   const abs = Math.abs(Math.round(n));
 
   if (l === 'kk') {
-    // В казахском языке существительное с числительным стоит в единственном числе: 5 машина, 10 көлік
-    return forms[0];
+    // В казахском языке существительное с числительным стоит в единственном числе: 5 көлік
+    return effectiveForms[0];
   }
 
   if (l === 'en') {
-    return abs === 1 ? forms[0] : forms[1];
+    return abs === 1 ? effectiveForms[0] : effectiveForms[1];
   }
 
   // Русский: 1 форма, 2-4 форма, 5+ форма
   const a = abs % 100;
   const b = a % 10;
-  if (a > 10 && a < 20) return forms[2];
-  if (b > 1 && b < 5) return forms[1];
-  if (b === 1) return forms[0];
-  return forms[2];
+  if (a > 10 && a < 20) return effectiveForms[2];
+  if (b > 1 && b < 5) return effectiveForms[1];
+  if (b === 1) return effectiveForms[0];
+  return effectiveForms[2];
 }
 
 export function getCarsUnit(lang?: Lang): [string, string, string] {

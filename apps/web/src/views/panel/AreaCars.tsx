@@ -3,10 +3,10 @@ import { MODEL_BY_ID, type AreaId, type BodyView } from '@allur/contracts/ref';
 import { useLive } from '../../state/live';
 import { usePlantModel } from '../../state/plant';
 import { selectCar, useView } from '../../state/view';
-import { FLAG_TEXT, carsOfArea, minutesHere, normMinutes, shortVin } from '../../state/cars';
+import { carsOfArea, minutesHere, normMinutes, shortVin } from '../../state/cars';
 import { TONE_CLASS, cx } from '../../lib/tones';
 import { useTranslation } from '../../i18n/store';
-import { translateDynamicText } from '../../i18n/translator';
+import { translateCarFlag, translateDynamicText, translateEquipmentName } from '../../i18n/translator';
 import type { Lang } from '../../i18n/types';
 
 /** Сколько строк видно сразу */
@@ -70,12 +70,14 @@ function whereShort(b: BodyView, equipment: string | undefined, lang: Lang): str
   if (b.loc.kind === 'warehouse') return lang === 'kk' ? 'машина жиынтығы' : lang === 'en' ? 'assembly kit' : 'машинокомплект';
   if (b.loc.kind === 'finished') return lang === 'kk' ? 'қоймада' : lang === 'en' ? 'in warehouse' : 'на складе';
   if (b.loc.precision === 'stage') return lang === 'kk' ? 'нақты орны белгіленбеген' : lang === 'en' ? 'exact location not marked' : 'точное место не отмечено';
-  return equipment ?? b.loc.equipmentId ?? '';
+  const raw = equipment ?? b.loc.equipmentId ?? '';
+  return translateEquipmentName(raw, lang);
 }
 
 function ColorDot({ b, lang }: { b: BodyView; lang: Lang }) {
   const fallbackColor = lang === 'kk' ? 'түс берілмеген' : lang === 'en' ? 'color not specified' : 'цвет не передан';
-  return <span className="size-3 shrink-0 rounded-full ring-1 ring-line-strong" style={{ background: b.color?.hex ?? 'transparent' }} title={b.color?.name ?? fallbackColor} aria-hidden />;
+  const colorTitle = b.color?.name ? translateDynamicText(b.color.name, lang) : fallbackColor;
+  return <span className="size-3 shrink-0 rounded-full ring-1 ring-line-strong" style={{ background: b.color?.hex ?? 'transparent' }} title={colorTitle} aria-hidden />;
 }
 
 function CarRow({ b, now, on, where }: { b: BodyView; now: number; on: boolean; where: string }) {
@@ -99,7 +101,7 @@ function CarRow({ b, now, on, where }: { b: BodyView; now: number; on: boolean; 
       <span className="font-mono text-sm text-ink-2">{shortVin(b)}</span>
       <span className="truncate text-ink-2">
         {where}
-        {marks.length > 0 && <span className={cx('ml-1.5 text-sm font-semibold', TONE_CLASS.attention.ink)}>{marks.map((f) => translateDynamicText(FLAG_TEXT[f], lang)).join(', ')}</span>}
+        {marks.length > 0 && <span className={cx('ml-1.5 text-sm font-semibold', TONE_CLASS.attention.ink)}>{marks.map((f) => translateCarFlag(f, lang)).join(', ')}</span>}
       </span>
       <span className={cx('num whitespace-nowrap text-sm', delayed ? cx('font-semibold', TONE_CLASS.attention.ink) : 'text-ink-3')}>
         {min}

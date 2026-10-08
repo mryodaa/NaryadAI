@@ -30,6 +30,8 @@ export interface AreaRowView {
   metric: TextView | null;
   /** Одна строка: причина отклонения или что происходит */
   reason: TextView | null;
+  /** Отклонение пока только по сигналу: signal — один источник, probable — два, на месте не проверено */
+  check?: 'signal' | 'probable';
 }
 
 /** Название строки участка: у ОТК — короткое, у остальных — полное */
@@ -135,6 +137,7 @@ export function areaRows(s: LiveSnapshot, paintDefect: number | null, model: Pla
         output: stage.kind === 'warehouse_in' ? null : { done: a.done, plan: a.planToNow },
         metric: areaMetric(s, a, stage.kind, stage.id === paintId, paintDefect),
         reason: areaReason(s, a, stage.kind, status),
+        check: a.check,
       },
     ];
   });

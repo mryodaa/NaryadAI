@@ -137,3 +137,27 @@ describe('потоки по моделям и выборочные операц�
     expect(track).toBeLessThan(qc * 0.3);
   });
 });
+
+describe('наряд пришёл снова (мастер сделал раньше срока)', () => {
+  it('прежнее время отменяется — работа выполняется один раз, сейчас', () => {
+    const world = new World(setupScenario('paint_filter', 7).preset, SEED_PLANT);
+    run(world, '08:10');
+    const wo = {
+      workOrderId: 'wo-test',
+      incidentId: 'inc-1',
+      action: 'replace_filter' as const,
+      area: 'paint',
+      equipmentId: 'BOOTH-02',
+      title: 'Замена фильтра',
+      scheduledAt: new Date(at('09:00')).toISOString(),
+      durationMin: 20,
+      issuedAt: new Date(at('08:10')).toISOString(),
+    };
+    world.applyWorkOrder(wo);
+    world.applyWorkOrder({ ...wo, scheduledAt: new Date(at('08:20')).toISOString(), durationMin: 1 });
+    const events = run(world, '09:30');
+    const done = events.filter((e) => e.kind === 'work_done');
+    expect(done).toHaveLength(1);
+    expect(done[0]!.t).toBeLessThan(at('08:21'));
+  });
+});
