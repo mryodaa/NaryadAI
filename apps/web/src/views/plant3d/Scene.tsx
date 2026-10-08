@@ -22,6 +22,7 @@ import { CarPath } from './CarPath';
 import { ReplayGhost } from './ReplayGhost';
 import type { Replay } from './replay';
 import { useView } from '../../state/view';
+import { useLive } from '../../state/live';
 import { filtersActive, matchesFilters } from '../../state/search';
 import { useTranslation } from '../../i18n/store';
 import { translateArea, translateDynamicText, translateStatus } from '../../i18n/translator';
@@ -61,6 +62,17 @@ export function Scene(props: SceneProps) {
   const { t, lang } = useTranslation();
   const mats = useMaterials(palette);
   const live = data.plcConnected && stage >= 1;
+  // где сейчас стоят кузова: робот двигается, только когда на его посту есть кузов
+  const bodies = useLive((x) => x.bodies);
+  const occupied = useMemo(() => {
+    const out = new Set<string>();
+    for (const v of bodies) {
+      if (v.loc.kind !== 'station' && v.loc.kind !== 'stage') continue;
+      if (v.loc.equipmentId) out.add(v.loc.equipmentId);
+      if (v.loc.postId) out.add(v.loc.postId);
+    }
+    return out;
+  }, [bodies]);
   const b = layout.bounds;
   const midX = (b.x0 + b.x1) / 2;
   const width = b.x1 - b.x0;
@@ -139,6 +151,7 @@ export function Scene(props: SceneProps) {
             layout={layout}
             live={live}
             reducedMotion={reducedMotion}
+            busy={occupied.has(place.id) || place.posts.some((p) => occupied.has(p))}
             onHover={onHover}
             onPick={onPick}
           />
@@ -146,7 +159,7 @@ export function Scene(props: SceneProps) {
         <WarehouseContent layout={layout} stock={data.stock} mats={mats} palette={palette} />
         <FinishedContent layout={layout} mats={mats} />
 
-        <Bodies flow={flow} selected={props.selectedCar} onHover={onHover} onPick={props.onPickCar} />
+        <Bodies flow={flow} selected={props.selectedCar} reducedMotion={reducedMotion} onHover={onHover} onPick={props.onPickCar} />
         {props.pathDetail && <CarPath detail={props.pathDetail} layout={layout} flow={flow} />}
         {props.replay && props.stageName && <ReplayGhost replay={props.replay} stageName={props.stageName} portal={portal} />}
 
@@ -446,15 +459,19 @@ const BufferPad = memo(
 const SELECT_COLOR = '#2b5fd9';
 /** Приглушённая машина при включённом фильтре — почти цвет пола */
 const DIM_COLOR = new Color('#e4e8ed');
+/** Смена цвета кузова (металл → катафорез → грунт → цвет) — плавно, ~600 мс */
+const TINT_LAMBDA = 7.5;
 
 function Bodies({
   flow,
   selected,
+  reducedMotion,
   onHover,
   onPick,
 }: {
   flow: BodyFlow;
   selected: string | null;
+  reducedMotion: boolean;
   onHover: (t: HoverTarget | null) => void;
   onPick: (bodyId: string) => void;
 }) {
@@ -475,8 +492,9 @@ function Bodies({
   const dummy = useMemo(() => new Object3D(), []);
   const ring = useMemo(() => new Object3D(), []);
   const tint = useMemo(() => new Color(), []);
+  const shown = useMemo(() => new Map<string, Color>(), []);
   useEffect(() => invalidate(), [selected, hovered, filters, invalidate]);
-  useFrame((state) => {
+  useFrame((state, dt) => {
     const mesh = ref.current;
     if (!mesh) return;
     let sel = false;
@@ -484,6 +502,8 @@ function Bodies({
     const filtering = filtersActive(filters);
     const match = matchRef.current;
     let matched = 0;
+    const kTint = reducedMotion ? 1 : 1 - Math.exp(-TINT_LAMBDA * Math.min(dt, 0.1));
+    let fading = false;
     const outline = (m: Mesh | null, k: number) => {
       if (!m) return;
       m.position.copy(dummy.position);
@@ -501,7 +521,15 @@ function Bodies({
       else dummy.scale.setScalar(k);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
-      const color = bodyTint(view, tint);
+      const target = bodyTint(view, tint);
+      let cur = shown.get(view.bodyId);
+      if (!cur) shown.set(view.bodyId, (cur = target.clone()));
+      else if (!cur.equals(target)) {
+        cur.lerp(target, kTint);
+        if (Math.abs(cur.r - target.r) + Math.abs(cur.g - target.g) + Math.abs(cur.b - target.b) < 0.004) cur.copy(target);
+        else fading = true;
+      }
+      const color = tint.copy(cur);
       if (filtering) {
         if (matchesFilters(view, filters)) {
           // подходящая под фильтр — обведена
@@ -534,7 +562,10 @@ function Bodies({
     mesh.count = Math.min(count, MAX_BODIES);
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    if (moving) state.invalidate();
+    // область попадания для наведения и клика — по текущим местам машин (считается лениво, при наведении)
+    mesh.boundingSphere = null;
+    if (shown.size > count * 2 + 32) for (const id of shown.keys()) if (!flow.has(id)) shown.delete(id);
+    if (moving || fading) state.invalidate();
   });
   return (
     <>

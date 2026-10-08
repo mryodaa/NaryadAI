@@ -11,7 +11,9 @@ import { useTranslation } from '../i18n/store';
 
 /**
  * В шапке меню, наблюдение, поиск, языки, часы и роль. Полные подписи — только там, где они помещаются:
- * меню и поиск — от 1800 px, роль — от 2100 px; уже — короткие («Источники», «Руководитель»).
+ * меню — от 1800 px, поиск — от 2000 px, роль — от 2100 px; уже — короткие («Источники», «Руководитель»).
+ * Название продукта рядом с логотипом — от 1700 px, полная дата у часов — от 1700 px.
+ * Если меню всё равно не помещается (узкий экран), оно прокручивается, а правый блок остаётся на месте.
  */
 function useMinWidth(px: number): boolean {
   const q = `(min-width: ${px}px)`;
@@ -36,7 +38,9 @@ export function AppHeader({ now, shiftIndex, speed }: { now: string | null; shif
   const location = useLocation();
   const navigate = useNavigate();
   const wide = useMinWidth(1800);
+  const wideSearch = useMinWidth(2000);
   const wideRole = useMinWidth(2100);
+  const wideClock = useMinWidth(1700);
 
   const NAV = [
     { to: '/', label: t.nav.shopNow },
@@ -59,15 +63,15 @@ export function AppHeader({ now, shiftIndex, speed }: { now: string | null; shif
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur print:hidden">
       <div className="flex h-14 items-center gap-2 px-4 min-[1500px]:gap-3 2xl:gap-5 2xl:px-6">
-        <div className="flex shrink-0 items-center gap-2.5">
+        <div className="flex shrink-0 items-center gap-2.5" title={`${t.nav.digitalTwin} · ${t.nav.locationSubtitle}`}>
           <img src="/favicon.svg" alt="" className="size-8" />
-          <div className="leading-tight">
+          <div className="hidden leading-tight min-[1700px]:block">
             <div className="font-semibold">{t.nav.digitalTwin}</div>
             <div className="text-sm text-ink-3">{t.nav.locationSubtitle}</div>
           </div>
         </div>
 
-        <nav className="flex h-full items-stretch gap-0.5" aria-label={t.nav.digitalTwin}>
+        <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto [scrollbar-width:none]" aria-label={t.nav.digitalTwin}>
           {NAV.map((item) => (
             <NavLink
               key={item.to}
@@ -90,16 +94,20 @@ export function AppHeader({ now, shiftIndex, speed }: { now: string | null; shif
         <div className="ml-auto flex shrink-0 items-center gap-2 2xl:gap-3">
           <CrewInbox />
           <WatchBadge wide={wide} />
-          <CarSearch wide={wide} />
+          <CarSearch wide={wideSearch} />
           <LanguageSwitcher compact={!wide} />
           {now && (
-            <div className="text-right leading-tight" title={t.nav.twinTime}>
+            <div
+              className="whitespace-nowrap text-right leading-tight"
+              title={`${t.nav.twinTime}: ${weekday(now, lang)}, ${dateShort(now, lang)} · ${timeHM(now)}${speed !== 1 ? t.nav.accelerated(speed) : ''}`}
+            >
               <div className="num font-semibold">
-                {weekday(now, lang)}, {dateShort(now, lang)} · {timeHM(now)}
+                {wideClock && `${weekday(now, lang)}, `}
+                {dateShort(now, lang)} · {timeHM(now)}
               </div>
               <div className="text-sm text-ink-3">
                 {shiftIndex ? t.nav.shiftNumber(shiftIndex) : t.nav.noShift}
-                {speed !== 1 && t.nav.accelerated(speed)}
+                {speed !== 1 && (wideClock ? t.nav.accelerated(speed) : ` · ×${speed}`)}
               </div>
             </div>
           )}

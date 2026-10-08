@@ -61,6 +61,8 @@ interface ModelProps {
   /** есть данные контроллеров: оборудование «живое» */
   live: boolean;
   reducedMotion: boolean;
+  /** На посту оборудования стоит кузов: робот работает только с ним */
+  busy: boolean;
   onHover: (t: HoverTarget | null) => void;
   onPick: (area: AreaId, equipmentId: string) => void;
 }
@@ -74,6 +76,7 @@ function sameModel(a: ModelProps, b: ModelProps): boolean {
     a.layout === b.layout &&
     a.live === b.live &&
     a.reducedMotion === b.reducedMotion &&
+    a.busy === b.busy &&
     a.onHover === b.onHover &&
     a.onPick === b.onPick &&
     a.view?.status === b.view?.status &&
@@ -82,12 +85,12 @@ function sameModel(a: ModelProps, b: ModelProps): boolean {
 }
 
 export const EquipmentModel = memo(function EquipmentModel(props: ModelProps) {
-  const { place, view, mats, palette, layout, live, reducedMotion, onHover, onPick } = props;
+  const { place, view, mats, palette, layout, live, reducedMotion, busy, onHover, onPick } = props;
   const status = live ? (view?.status ?? null) : null;
   let model: React.ReactNode;
   switch (place.model) {
     case 'robot':
-      model = <Robot place={place} mats={mats} animate={status === 'run' && !reducedMotion} />;
+      model = <Robot place={place} mats={mats} animate={status === 'run' && busy && !reducedMotion} />;
       break;
     case 'booth':
       model = <Booth place={place} mats={mats} palette={palette} dp={live ? (view?.dp ?? null) : null} />;

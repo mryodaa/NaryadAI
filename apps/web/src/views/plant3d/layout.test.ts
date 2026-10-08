@@ -1,7 +1,7 @@
 // Планировка 3D из конфигурации: полосы параллельных станций, оборудование в стороне, поток кузовов.
 import { describe, expect, it } from 'vitest';
 import { SEED_PLANT, derivePlant, type PlantConfig } from '@allur/contracts/ref';
-import { buildLayout, LANE_GAP } from './layout';
+import { BODY, buildLayout, LANE_GAP } from './layout';
 import type { BodyView } from '@allur/contracts/ref';
 import { placeBodies } from './flow';
 
@@ -93,11 +93,20 @@ describe('места кузовов по трекеру', () => {
     expect(spots.get(lab.bodyId)).toEqual(layout.sides.find((x) => x.equipmentId === 'GEO-LAB')!.spots[0]);
   });
 
-  it('несколько кузовов на одном посту (оценка по времени) — друг за другом против потока', () => {
+  it('несколько кузовов на одном посту (оценка, перекраска) — не друг в друге и не в соседнем посту', () => {
     const a = body({ kind: 'stage', stageId: 'paint', equipmentId: 'BOOTH-02', postId: 'PAINT-B2', precision: 'stage', estimated: true });
     const b = body({ kind: 'stage', stageId: 'paint', equipmentId: 'BOOTH-02', postId: 'PAINT-B2', precision: 'stage', estimated: true });
-    const spots = placeBodies([a, b], layout);
-    expect(spots.get(a.bodyId)!.x).toBeGreaterThan(spots.get(b.bodyId)!.x);
-    expect(spots.get(a.bodyId)!.z).toBe(spots.get(b.bodyId)!.z);
+    const c = body({ kind: 'station', stageId: 'paint', equipmentId: 'BOOTH-01', postId: 'PAINT-B1', precision: 'station', estimated: false });
+    const spots = placeBodies([a, b, c], layout);
+    const all = [a, b, c].map((v) => spots.get(v.bodyId)!);
+    // первый пришедший — на посту, остальные — на свободном месте рядом
+    expect(all[0]).toEqual(layout.postSpots['PAINT-B2']);
+    expect(all[2]).toEqual(layout.postSpots['PAINT-B1']);
+    for (let i = 0; i < all.length; i++)
+      for (let j = i + 1; j < all.length; j++) {
+        const p = all[i]!;
+        const q = all[j]!;
+        expect(Math.abs(p.x - q.x) >= BODY.length || Math.abs(p.z - q.z) >= BODY.width).toBe(true);
+      }
   });
 });

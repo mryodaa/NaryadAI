@@ -29,7 +29,6 @@ import { Crew } from './crew';
 import { RequestDesk } from './requests';
 import { crewRoutes } from './routes/crew';
 import { reportRoutes } from './routes/reports';
-import { registerAuth } from './auth';
 import type { Ctx } from './context';
 
 const log = (msg: string) => console.log(`[шлюз] ${msg}`);
@@ -106,8 +105,6 @@ plant.onChange((cfg, changes) => {
 });
 
 const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 10 * 1024 * 1024 });
-// пароль команды — раньше всех маршрутов: закрывает интерфейс, API, WebSocket и документацию
-registerAuth(app);
 
 app.addContentTypeParser(['text/csv', 'text/plain'], { parseAs: 'string', bodyLimit: 10 * 1024 * 1024 }, (_req, body, done) => done(null, body));
 

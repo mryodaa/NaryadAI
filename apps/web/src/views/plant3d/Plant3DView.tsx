@@ -57,7 +57,8 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
   const model = usePlantModel();
   const layout = useMemo(() => buildLayout(model), [model]);
   const palette = useMemo(readPalette, []);
-  const flow = useMemo(() => new BodyFlow(layout), [layout]);
+  // одна на всё время сцены: при новой раскладке машины переезжают на новые места, а не появляются заново
+  const [flow] = useState(() => new BodyFlow(layout));
   const data = useSceneData(s);
   const area = useView((v) => v.area);
   const equipment = useView((v) => v.equipment);
@@ -237,7 +238,7 @@ function PlantScene({ snapshot: s, active, onLost }: { snapshot: LiveSnapshot; a
           onPick={openAreaPanel}
           onPickCar={selectCar}
         />
-        <BodiesSync flow={flow} reducedMotion={reducedMotion} />
+        <BodiesSync flow={flow} layout={layout} reducedMotion={reducedMotion} />
         <CameraRig layout={layout} flow={flow} area={area} equipment={equipment} insets={insets} tour={tour} incidents={incidentsOnScene} onUserControl={() => setTour(false)} />
         {showFps && <FpsProbe />}
       </Canvas>
@@ -394,9 +395,13 @@ function sceneKey(e: KeyboardEvent): boolean {
 }
 
 /** Кузова: каждое обновление трекера доводит картинку до состояния данных (без перерисовки сцены) */
-function BodiesSync({ flow, reducedMotion }: { flow: BodyFlow; reducedMotion: boolean }) {
+function BodiesSync({ flow, layout, reducedMotion }: { flow: BodyFlow; layout: PlantLayout; reducedMotion: boolean }) {
   const bodies = useLive((x) => x.bodies);
   const invalidate = useThree((st) => st.invalidate);
+  useEffect(() => {
+    flow.setLayout(layout, useLive.getState().bodies, performance.now(), reducedMotion);
+    invalidate();
+  }, [layout]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     flow.update(bodies, performance.now(), reducedMotion);
     invalidate();
